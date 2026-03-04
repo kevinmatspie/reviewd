@@ -72,12 +72,30 @@ def main(ctx, config_path: str | None):
     click.echo(f'reviewd v{VERSION}')
 
 
+UPDATE_CHECK_CACHE = Path(os.environ.get('XDG_CACHE_HOME', '~/.cache')).expanduser() / 'reviewd' / 'latest_version'
+UPDATE_CHECK_INTERVAL = 6 * 3600  # seconds
+
+
 def _check_for_updates():
     try:
-        import httpx
+        import time
 
-        resp = httpx.get('https://pypi.org/pypi/reviewd/json', timeout=2)
-        latest = resp.json()['info']['version']
+        now = time.time()
+        latest = None
+
+        if UPDATE_CHECK_CACHE.exists():
+            stat = UPDATE_CHECK_CACHE.stat()
+            if now - stat.st_mtime < UPDATE_CHECK_INTERVAL:
+                latest = UPDATE_CHECK_CACHE.read_text().strip()
+
+        if latest is None:
+            import httpx
+
+            resp = httpx.get('https://pypi.org/pypi/reviewd/json', timeout=2)
+            latest = resp.json()['info']['version']
+            UPDATE_CHECK_CACHE.parent.mkdir(parents=True, exist_ok=True)
+            UPDATE_CHECK_CACHE.write_text(latest)
+
         installed = tuple(int(x) for x in VERSION.split('.'))
         remote = tuple(int(x) for x in latest.split('.'))
         if remote > installed:
@@ -88,7 +106,7 @@ def _check_for_updates():
                 cmd = 'pipx upgrade reviewd'
             else:
                 cmd = 'pip install --upgrade reviewd'
-            click.echo(f'\033[33mUpdate available: v{VERSION} → v{latest}  ({cmd})\033[0m')
+            click.echo(f'\033[33mUpdate available: v{VERSION} \u2192 v{latest}  ({cmd})\033[0m')
     except Exception:
         pass
 
