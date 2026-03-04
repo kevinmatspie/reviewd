@@ -52,7 +52,8 @@ def _parse_cli(value: str, repo_name: str | None = None) -> CLI:
 
 def load_global_config(path: str | Path | None = None) -> GlobalConfig:
     if path is None:
-        path = Path('~/.config/reviewd/config.yaml').expanduser()
+        config_home = os.environ.get('XDG_CONFIG_HOME', '~/.config')
+        path = Path(config_home).expanduser() / 'reviewd' / 'config.yaml'
     else:
         path = Path(path).expanduser()
 
@@ -87,7 +88,8 @@ def load_global_config(path: str | Path | None = None) -> GlobalConfig:
             )
         )
 
-    state_db = data.get('state_db', '~/.local/share/reviewd/state.db')
+    default_data_home = os.environ.get('XDG_DATA_HOME', '~/.local/share')
+    state_db = data.get('state_db', f'{default_data_home}/reviewd/state.db')
     state_db = str(Path(_resolve_env_vars(state_db)).expanduser())
 
     return GlobalConfig(

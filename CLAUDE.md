@@ -25,6 +25,7 @@ Poller (GitHub/BB API) → State Check (SQLite) → Worktree (git) → AI Review
 - No broad except clauses
 - No unnecessary docstrings or comments
 - Tests only when explicitly asked
+- Never add Co-Authored-By to commits
 
 ## Key Files
 
@@ -74,7 +75,7 @@ Instructions merge: global + per-project concatenated (global first). Old `guide
 ## CLI
 
 ```bash
-reviewd init                                  # create config file
+reviewd init                                  # set up global + project config
 reviewd ls                                    # list repos + open PRs
 reviewd watch -v                              # daemon mode
 reviewd watch -v --review-existing            # review not-yet-reviewed open PRs

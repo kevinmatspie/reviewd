@@ -1,0 +1,27 @@
+# reviewd per-project config
+# Location: .reviewd.yaml in your repo root
+#
+# Project-specific instructions and settings.
+# These are merged with global config (global instructions come first).
+
+# Review instructions specific to this project
+# instructions: |
+#   Python 3.12+, Django 5.x.
+#   Check for missing select_related/prefetch_related.
+
+# Commands to run in the worktree during review
+# test_commands:
+#   - uv run ruff check .
+#   - uv run pytest tests/ -x -q
+
+# Severity filtering
+# skip_severities: [nitpick]        # options: critical, suggestion, nitpick, good
+# inline_comments_for: [critical]   # rest goes in summary
+
+# max_inline_comments: 5            # skip all inline if exceeded
+# show_overview: false               # show AI overview in summary comment
+# min_diff_lines: 0                 # skip initial review if fewer changed lines (0 = disabled)
+# min_diff_lines_update: 5          # skip re-review if fewer changed lines
+# review_cooldown_minutes: 0        # don't re-review same PR within N minutes
+# approve_if_no_critical: false     # auto-approve PRs with no critical findings
+# critical_task: false              # create PR task on critical findings (BitBucket only)

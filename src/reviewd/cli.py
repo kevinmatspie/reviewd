@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import importlib.resources
 import logging
+import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -13,7 +15,7 @@ from reviewd.daemon import review_single_pr, run_poll_loop
 from reviewd.models import CLI, GlobalConfig
 from reviewd.state import StateDB
 
-CONFIG_DIR = Path('~/.config/reviewd').expanduser()
+CONFIG_DIR = Path(os.environ.get('XDG_CONFIG_HOME', '~/.config')).expanduser() / 'reviewd'
 CONFIG_PATH = CONFIG_DIR / 'config.yaml'
 
 
@@ -66,19 +68,63 @@ def main(ctx, config_path: str | None):
     ctx.obj['config_path'] = config_path
 
 
+def _ensure_global_config(config_path: str | None) -> Path:
+    path = Path(config_path).expanduser() if config_path else CONFIG_PATH
+    if not path.exists():
+        click.echo(f'No global config found at {path}.')
+        if click.confirm('Run init to create it?', default=True):
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            example = importlib.resources.files('reviewd').joinpath('config.example.yaml')
+            shutil.copy2(str(example), path)
+            click.echo(f'Created {path}')
+            click.echo('Edit it to add your provider credentials and repos.')
+        raise SystemExit(1)
+    return path
+
+
+def _git_repo_root() -> Path | None:
+    try:
+        result = subprocess.run(
+            ['git', 'rev-parse', '--show-toplevel'],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return Path(result.stdout.strip())
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+
 @main.command()
 @click.pass_context
 def init(ctx):
-    """Create config file at ~/.config/reviewd/config.yaml."""
+    """Set up global config and per-project .reviewd.yaml."""
+    # Global config
     if CONFIG_PATH.exists():
-        click.echo(f'Config already exists: {CONFIG_PATH}')
-        if not click.confirm('Overwrite?', default=False):
-            return
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    example = importlib.resources.files('reviewd').joinpath('config.example.yaml')
-    shutil.copy2(str(example), CONFIG_PATH)
-    click.echo(f'Created {CONFIG_PATH}')
-    click.echo('Edit it to add your provider credentials and repos.')
+        click.echo(f'Global config already exists at {CONFIG_PATH}. \u2713')
+    else:
+        click.echo(f'No global config found. Creating {CONFIG_PATH}...')
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        example = importlib.resources.files('reviewd').joinpath('config.example.yaml')
+        shutil.copy2(str(example), CONFIG_PATH)
+        click.echo('Edit it to add your provider credentials and repos.')
+
+    # Project config
+    repo_root = _git_repo_root()
+    if repo_root is None:
+        return
+
+    project_config = repo_root / '.reviewd.yaml'
+    if project_config.exists():
+        click.echo(f'Project config already exists at {project_config}. \u2713')
+        return
+
+    if not click.confirm(f'Detected git repo at {repo_root}. Create .reviewd.yaml?', default=True):
+        return
+
+    example = importlib.resources.files('reviewd').joinpath('project.example.yaml')
+    shutil.copy2(str(example), project_config)
+    click.echo(f'Created {project_config}')
 
 
 @main.command()
@@ -90,6 +136,7 @@ def init(ctx):
 def watch(ctx, verbose: bool, dry_run: bool, review_existing: bool, cli: str | None):
     """Start the daemon — polls for new PRs and reviews them."""
     _setup_logging(verbose)
+    _ensure_global_config(ctx.obj['config_path'])
     config = load_global_config(ctx.obj['config_path'])
     _apply_cli_override(config, cli)
     run_poll_loop(config, dry_run=dry_run, review_existing=review_existing, verbose=verbose)
@@ -106,6 +153,7 @@ def watch(ctx, verbose: bool, dry_run: bool, review_existing: bool, cli: str | N
 def pr(ctx, repo: str, pr_id: int, verbose: bool, dry_run: bool, force: bool, cli: str | None):
     """One-shot review of a specific PR."""
     _setup_logging(verbose)
+    _ensure_global_config(ctx.obj['config_path'])
     config = load_global_config(ctx.obj['config_path'])
     _apply_cli_override(config, cli)
     review_single_pr(config, repo, pr_id=pr_id, dry_run=dry_run, force=force)
@@ -116,6 +164,7 @@ def pr(ctx, repo: str, pr_id: int, verbose: bool, dry_run: bool, force: bool, cl
 def ls_repos(ctx):
     """List watched repos and their open PRs."""
     _setup_logging(False)
+    _ensure_global_config(ctx.obj['config_path'])
     config = load_global_config(ctx.obj['config_path'])
     state_db = StateDB(config.state_db)
     try:
@@ -149,6 +198,7 @@ def ls_repos(ctx):
 def status(ctx, repo: str, verbose: bool, limit: int):
     """Show review history for a repo."""
     _setup_logging(verbose)
+    _ensure_global_config(ctx.obj['config_path'])
     config = load_global_config(ctx.obj['config_path'])
     state_db = StateDB(config.state_db)
     try:

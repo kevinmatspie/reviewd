@@ -91,7 +91,7 @@ class GlobalConfig:
     repos: list[RepoConfig]
     bitbucket: dict[str, str] = field(default_factory=dict)
     github: GithubConfig | None = None
-    state_db: str = '~/.local/share/reviewd/state.db'
+    state_db: str = ''
     cli: CLI = CLI.CLAUDE
     model: str | None = None
     cli_args: list[str] = field(default_factory=list)

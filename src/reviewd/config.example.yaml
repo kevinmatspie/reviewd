@@ -1,5 +1,5 @@
 # reviewd global config
-# Location: ~/.config/reviewd/config.yaml
+# Location: $XDG_CONFIG_HOME/reviewd/config.yaml (default: ~/.config/reviewd/config.yaml)
 #
 # Run `reviewd init` to copy this file to the right location.
 # Uncomment and customize the settings you need.

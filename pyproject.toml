@@ -1,10 +1,11 @@
 [project]
 name = "reviewd"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local AI code reviewer for GitHub and BitBucket PRs — uses Claude or Gemini CLI to review pull requests and post structured comments"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
+authors = [{name = "Simion Agavriloaei", email = "hi@simion.cv"}]
 keywords = ["code-review", "ai", "github", "bitbucket", "pull-request", "claude", "gemini", "automation"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -22,6 +23,11 @@ dependencies = [
 
 [project.scripts]
 reviewd = "reviewd.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/simion/reviewd"
+Repository = "https://github.com/simion/reviewd"
+Issues = "https://github.com/simion/reviewd/issues"
 
 [build-system]
 requires = ["hatchling"]

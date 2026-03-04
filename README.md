@@ -37,7 +37,7 @@ Requires Python 3.12+ and [`uv`](https://docs.astral.sh/uv/). You also need `cla
 ### 2. Configure
 
 ```bash
-reviewd init   # creates ~/.config/reviewd/config.yaml
+reviewd init   # set up global config + per-project .reviewd.yaml
 ```
 
 <details>
@@ -166,7 +166,7 @@ inline_comments_for: [critical]  # rest goes in summary
 ## CLI Reference
 
 ```bash
-reviewd init                                  # create config file
+reviewd init                                  # set up global + project config
 reviewd ls                                    # list repos and open PRs
 reviewd watch -v                              # daemon mode
 reviewd watch -v --dry-run                    # preview, no posting
