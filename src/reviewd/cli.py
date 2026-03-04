@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.metadata
 import importlib.resources
 import logging
 import os
@@ -14,6 +15,8 @@ from reviewd.config import get_provider, load_global_config
 from reviewd.daemon import review_single_pr, run_poll_loop
 from reviewd.models import CLI, GlobalConfig
 from reviewd.state import StateDB
+
+VERSION = importlib.metadata.version('reviewd')
 
 CONFIG_DIR = Path(os.environ.get('XDG_CONFIG_HOME', '~/.config')).expanduser() / 'reviewd'
 CONFIG_PATH = CONFIG_DIR / 'config.yaml'
@@ -66,6 +69,28 @@ def _setup_logging(verbose: bool):
 def main(ctx, config_path: str | None):
     ctx.ensure_object(dict)
     ctx.obj['config_path'] = config_path
+    click.echo(f'reviewd v{VERSION}')
+
+
+def _check_for_updates():
+    try:
+        import httpx
+
+        resp = httpx.get('https://pypi.org/pypi/reviewd/json', timeout=2)
+        latest = resp.json()['info']['version']
+        installed = tuple(int(x) for x in VERSION.split('.'))
+        remote = tuple(int(x) for x in latest.split('.'))
+        if remote > installed:
+            exe = sys.executable
+            if 'uv/tools' in exe or 'uv\\tools' in exe:
+                cmd = 'uv tool upgrade reviewd'
+            elif 'pipx' in exe:
+                cmd = 'pipx upgrade reviewd'
+            else:
+                cmd = 'pip install --upgrade reviewd'
+            click.echo(f'\033[33mUpdate available: v{VERSION} → v{latest}  ({cmd})\033[0m')
+    except Exception:
+        pass
 
 
 def _ensure_global_config(config_path: str | None) -> Path:
@@ -136,6 +161,7 @@ def init(ctx):
 def watch(ctx, verbose: bool, dry_run: bool, review_existing: bool, cli: str | None):
     """Start the daemon — polls for new PRs and reviews them."""
     _setup_logging(verbose)
+    _check_for_updates()
     _ensure_global_config(ctx.obj['config_path'])
     config = load_global_config(ctx.obj['config_path'])
     _apply_cli_override(config, cli)
