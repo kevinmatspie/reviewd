@@ -211,7 +211,7 @@ reviewd status <repo>                         # review history
 
 ## Roadmap
 
-- [ ] Parallel PR review queue
+- [ ] Parallel PR review queue — currently PRs are reviewed sequentially, which is fine for most teams since each review takes 1-3 minutes and the poll loop catches up quickly
 - [ ] GitLab support
 
 ## Disclaimer
