@@ -11,7 +11,7 @@ from pathlib import Path
 import click
 import httpx
 
-from reviewd.colors import BOLD_WHITE, CLEAR_LINE, DIM, GREEN, RESET, WHITE, YELLOW
+from reviewd.colors import BOLD_WHITE, CLEAR_LINE, CYAN, DIM, GREEN, RESET, WHITE, YELLOW
 from reviewd.commenter import post_review
 from reviewd.config import get_provider, load_project_config
 from reviewd.models import GlobalConfig, PRInfo, ProjectConfig, RepoConfig
@@ -144,7 +144,8 @@ def _process_pr(
 
     logger.log(
         22,
-        f'Reviewing PR #%d: %s {RESET}by {BOLD_WHITE}%s{RESET} (commit %s)',
+        f'{GREEN}%s{RESET} — Reviewing PR #%d: {CYAN}%s{RESET} by {BOLD_WHITE}%s{RESET} (commit %s)',
+        repo_config.name,
         pr.pr_id,
         pr.title,
         pr.author,
