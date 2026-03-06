@@ -8,6 +8,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+import click
 import httpx
 
 from reviewd.colors import BOLD_WHITE, CLEAR_LINE, DIM, GREEN, RESET, WHITE, YELLOW
@@ -328,7 +329,8 @@ def review_single_pr(
 
     repo_config = next((r for r in global_config.repos if r.name == repo_name), None)
     if repo_config is None:
-        raise ValueError(f'Repo "{repo_name}" not found in config')
+        available = ', '.join(r.name for r in global_config.repos) or '(none)'
+        raise click.ClickException(f'Repo "{repo_name}" not found in config. Available: {available}')
 
     cleanup_stale_worktrees(repo_config.path)
 

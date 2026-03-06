@@ -17,7 +17,10 @@ from reviewd.daemon import review_single_pr, run_poll_loop
 from reviewd.models import CLI, GlobalConfig
 from reviewd.state import StateDB
 
-VERSION = importlib.metadata.version('reviewd')
+try:
+    VERSION = importlib.metadata.version('reviewd')
+except importlib.metadata.PackageNotFoundError:
+    VERSION = '0.0.0-dev'
 
 CONFIG_DIR = Path(os.environ.get('XDG_CONFIG_HOME', '~/.config')).expanduser() / 'reviewd'
 CONFIG_PATH = CONFIG_DIR / 'config.yaml'

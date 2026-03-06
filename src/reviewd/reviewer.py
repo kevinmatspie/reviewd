@@ -186,14 +186,21 @@ def invoke_cli(
         logger.debug('Prompt:\n%s', prompt)
         env = {**os.environ}
         env.pop('CLAUDECODE', None)
-        proc = subprocess.Popen(
-            cmd,
-            cwd=cwd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=env,
-        )
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=cwd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+            )
+        except FileNotFoundError as e:
+            raise RuntimeError(
+                f'"{cli.value}" CLI not found. Install it first: https://github.com/anthropics/claude-code'
+                if cli.value == 'claude'
+                else f'"{cli.value}" CLI not found. Make sure it is installed and on your PATH.'
+            ) from e
 
         stderr_lines: list[str] = []
         stop_event = threading.Event()
@@ -252,15 +259,24 @@ def extract_json(output: str) -> dict:
         logger.error('No JSON block found in AI output. Last 500 chars:\n%s', tail)
         raise ValueError('No JSON block found in AI output')
     raw = matches[-1]
-    return json.loads(raw)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        logger.error('Malformed JSON in AI output: %s\nRaw JSON:\n%s', e, raw[:1000])
+        raise ValueError(f'Malformed JSON in AI output: {e}') from e
 
 
 def parse_review_result(data: dict) -> ReviewResult:
     findings = []
     for f in data.get('findings', []):
+        try:
+            severity = Severity(f.get('severity', 'suggestion'))
+        except ValueError:
+            logger.warning('Unknown severity %r in finding, defaulting to suggestion', f.get('severity'))
+            severity = Severity.SUGGESTION
         findings.append(
             Finding(
-                severity=Severity(f['severity']),
+                severity=severity,
                 category=f.get('category', 'General'),
                 title=f.get('title', ''),
                 file=f.get('file', ''),

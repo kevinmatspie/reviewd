@@ -128,8 +128,14 @@ def load_global_config(path: str | Path | None = None) -> GlobalConfig:
     else:
         path = Path(path).expanduser()
 
-    with open(path) as f:
-        data = yaml.safe_load(f)
+    try:
+        with open(path) as f:
+            data = yaml.safe_load(f)
+    except yaml.YAMLError as e:
+        raise SystemExit(f'Invalid YAML in {path}: {e}') from e
+
+    if not isinstance(data, dict):
+        raise SystemExit(f'Invalid config in {path}: expected a YAML mapping, got {type(data).__name__}')
 
     global_bb = _parse_bitbucket_tokens(data['bitbucket']) if 'bitbucket' in data else {}
 
@@ -140,7 +146,11 @@ def load_global_config(path: str | Path | None = None) -> GlobalConfig:
     global_cli = _parse_cli(data.get('cli', 'claude'))
 
     repos = []
-    for repo_data in data.get('repos', []):
+    for i, repo_data in enumerate(data.get('repos', [])):
+        for field in ('name', 'path', 'provider'):
+            if field not in repo_data:
+                raise SystemExit(f'Repo #{i + 1} in {path} is missing required field "{field}"')
+
         repo_gh = None
         if 'github' in repo_data:
             repo_gh = _parse_github_config(repo_data['github'])
