@@ -188,6 +188,7 @@ def load_global_config(path: str | Path | None = None) -> GlobalConfig:
         skip_title_patterns=data.get('skip_title_patterns', ['[no-review]', '[wip]', '[no-claudiu]']),
         skip_authors=data.get('skip_authors', []),
         poll_interval_seconds=data.get('poll_interval_seconds', 60),
+        max_concurrent_reviews=data.get('max_concurrent_reviews', 4),
         review_title=data.get('review_title', "Code Review by Nea' ~~Caisă~~ Claudiu"),
         footer=data.get(
             'footer',
@@ -202,10 +203,13 @@ _config_logger = logging.getLogger(__name__)
 CONFIG_NAME = '.reviewd.yaml'
 
 
+_GIT_ENV = {**os.environ, 'GIT_TERMINAL_PROMPT': '0'}
+
+
 def _sync_project_config(repo: Path):
     """Auto-pull if .reviewd.yaml changed on remote and working copy is clean."""
     # Fetch latest
-    subprocess.run(['git', 'fetch', '--quiet'], cwd=repo, capture_output=True)
+    subprocess.run(['git', 'fetch', '--quiet'], cwd=repo, capture_output=True, env=_GIT_ENV)
 
     # Check if local working copy is clean
     status = subprocess.run(
@@ -232,6 +236,7 @@ def _sync_project_config(repo: Path):
         cwd=repo,
         capture_output=True,
         text=True,
+        env=_GIT_ENV,
     )
     if result.returncode == 0:
         _config_logger.info('Auto-pulled %s', repo.name)

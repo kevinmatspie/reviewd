@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import importlib.metadata
-import importlib.resources
 import logging
 import os
-import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -70,13 +67,20 @@ def _setup_logging(verbose: bool):
     logging.getLogger('httpcore').setLevel(logging.WARNING)
 
 
-@click.group()
+@click.group(invoke_without_command=True)
 @click.option('--config', 'config_path', default=None, help='Path to global config file')
 @click.pass_context
 def main(ctx, config_path: str | None):
     ctx.ensure_object(dict)
     ctx.obj['config_path'] = config_path
     click.echo(f'reviewd v{VERSION}')
+
+    if ctx.invoked_subcommand is None:
+        path = Path(config_path).expanduser() if config_path else CONFIG_PATH
+        if not path.exists():
+            ctx.invoke(init)
+        else:
+            click.echo(ctx.get_help())
 
 
 UPDATE_CHECK_CACHE = Path(os.environ.get('XDG_CACHE_HOME', '~/.cache')).expanduser() / 'reviewd' / 'latest_version'
@@ -121,60 +125,35 @@ def _check_for_updates():
 def _ensure_global_config(config_path: str | None) -> Path:
     path = Path(config_path).expanduser() if config_path else CONFIG_PATH
     if not path.exists():
-        click.echo(f'No global config found at {path}.')
-        if click.confirm('Run init to create it?', default=True):
-            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-            example = importlib.resources.files('reviewd').joinpath('config.example.yaml')
-            shutil.copy2(str(example), path)
-            click.echo(f'Created {path}')
-            click.echo('Edit it to add your provider credentials and repos.')
-        raise SystemExit(1)
+        from reviewd.wizard import run_wizard
+
+        click.echo(f'No config found at {path}. Starting setup wizard...')
+        run_wizard()
+        if not path.exists():
+            raise SystemExit(1)
     return path
 
 
-def _git_repo_root() -> Path | None:
-    try:
-        result = subprocess.run(
-            ['git', 'rev-parse', '--show-toplevel'],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return Path(result.stdout.strip())
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return None
-
-
 @main.command()
+@click.option('--sample', is_flag=True, help='Write annotated sample config (non-interactive, for VPS/CI)')
 @click.pass_context
-def init(ctx):
-    """Set up global config and per-project .reviewd.yaml."""
-    # Global config
+def init(ctx, sample: bool):
+    """Interactive setup wizard — configure repos, credentials, and AI CLI."""
+    from reviewd.wizard import SAMPLE_CONFIG, run_wizard
+
+    if sample:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        CONFIG_PATH.write_text(SAMPLE_CONFIG)
+        click.echo(f'Created sample config at {CONFIG_PATH}')
+        click.echo('Edit it to add your tokens and repos.')
+        return
+
     if CONFIG_PATH.exists():
         click.echo(f'Global config already exists at {CONFIG_PATH}. \u2713')
-    else:
-        click.echo(f'No global config found. Creating {CONFIG_PATH}...')
-        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        example = importlib.resources.files('reviewd').joinpath('config.example.yaml')
-        shutil.copy2(str(example), CONFIG_PATH)
-        click.echo('Edit it to add your provider credentials and repos.')
+        if not click.confirm('Re-run setup wizard?', default=False):
+            return
 
-    # Project config
-    repo_root = _git_repo_root()
-    if repo_root is None:
-        return
-
-    project_config = repo_root / '.reviewd.yaml'
-    if project_config.exists():
-        click.echo(f'Project config already exists at {project_config}. \u2713')
-        return
-
-    if not click.confirm(f'Detected git repo at {repo_root}. Create .reviewd.yaml?', default=True):
-        return
-
-    example = importlib.resources.files('reviewd').joinpath('project.example.yaml')
-    shutil.copy2(str(example), project_config)
-    click.echo(f'Created {project_config}')
+    run_wizard()
 
 
 @main.command()
@@ -182,14 +161,17 @@ def init(ctx):
 @click.option('--dry-run', is_flag=True, help='Print reviews without posting')
 @click.option('--review-existing', is_flag=True, help='Review unreviewed open PRs on startup')
 @click.option('--cli', type=click.Choice(['claude', 'gemini']), default=None, help='Override AI CLI for all repos')
+@click.option('--concurrency', type=int, default=None, help='Max concurrent reviews (default: 4)')
 @click.pass_context
-def watch(ctx, verbose: bool, dry_run: bool, review_existing: bool, cli: str | None):
+def watch(ctx, verbose: bool, dry_run: bool, review_existing: bool, cli: str | None, concurrency: int | None):
     """Start the daemon — polls for new PRs and reviews them."""
     _setup_logging(verbose)
     _check_for_updates()
     _ensure_global_config(ctx.obj['config_path'])
     config = load_global_config(ctx.obj['config_path'])
     _apply_cli_override(config, cli)
+    if concurrency is not None:
+        config.max_concurrent_reviews = concurrency
     run_poll_loop(config, dry_run=dry_run, review_existing=review_existing, verbose=verbose)
 
 

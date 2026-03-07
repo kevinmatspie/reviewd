@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -8,6 +9,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from collections import defaultdict
 from collections.abc import Callable
 from pathlib import Path
 
@@ -25,6 +27,18 @@ logger = logging.getLogger(__name__)
 
 JSON_BLOCK_PATTERN = re.compile(r'```json\s*\n(.*?)\n\s*```', re.DOTALL)
 DEFAULT_TIMEOUT = 600
+_GIT_ENV = {**os.environ, 'GIT_TERMINAL_PROMPT': '0'}
+
+_repo_locks: defaultdict[str, threading.Lock] = defaultdict(threading.Lock)
+_active_procs: set[subprocess.Popen] = set()
+_active_procs_lock = threading.Lock()
+
+
+def terminate_all():
+    with _active_procs_lock:
+        for proc in _active_procs:
+            with contextlib.suppress(OSError):
+                proc.terminate()
 
 
 def cleanup_stale_worktrees(repo_path: str):
@@ -47,6 +61,7 @@ def cleanup_stale_worktrees(repo_path: str):
             ['git', 'worktree', 'remove', str(entry), '--force'],
             cwd=repo_path,
             capture_output=True,
+            env=_GIT_ENV,
         )
         if result.returncode == 0:
             logger.info('Cleaned up stale worktree: %s', entry.name)
@@ -61,38 +76,43 @@ def create_worktree(repo_path: str, pr: PRInfo) -> str:
     if worktree_dir.exists():
         cleanup_worktree(repo_path, pr)
 
-    # Try fetching branch by name first; fall back to destination only
-    # (source branch may have been deleted after merge)
-    fetch_result = subprocess.run(
-        ['git', 'fetch', 'origin', pr.source_branch, pr.destination_branch],
-        cwd=repo_path,
-        capture_output=True,
-    )
-    if fetch_result.returncode != 0:
-        logger.warning('Source branch fetch failed, fetching destination only')
+    with _repo_locks[repo_path]:
+        # Try fetching branch by name first; fall back to destination only
+        # (source branch may have been deleted after merge)
+        fetch_result = subprocess.run(
+            ['git', 'fetch', 'origin', pr.source_branch, pr.destination_branch],
+            cwd=repo_path,
+            capture_output=True,
+            env=_GIT_ENV,
+        )
+        if fetch_result.returncode != 0:
+            logger.warning('Source branch fetch failed, fetching destination only')
+            subprocess.run(
+                ['git', 'fetch', 'origin', pr.destination_branch],
+                cwd=repo_path,
+                check=True,
+                capture_output=True,
+                env=_GIT_ENV,
+            )
+
+        # Use branch ref if available, otherwise the commit hash (must exist locally)
+        checkout_ref = f'origin/{pr.source_branch}'
+        ref_check = subprocess.run(
+            ['git', 'rev-parse', '--verify', checkout_ref],
+            cwd=repo_path,
+            capture_output=True,
+            env=_GIT_ENV,
+        )
+        if ref_check.returncode != 0:
+            checkout_ref = pr.source_commit
+
         subprocess.run(
-            ['git', 'fetch', 'origin', pr.destination_branch],
+            ['git', 'worktree', 'add', str(worktree_dir), checkout_ref, '--detach'],
             cwd=repo_path,
             check=True,
             capture_output=True,
+            env=_GIT_ENV,
         )
-
-    # Use branch ref if available, otherwise the commit hash (must exist locally)
-    checkout_ref = f'origin/{pr.source_branch}'
-    ref_check = subprocess.run(
-        ['git', 'rev-parse', '--verify', checkout_ref],
-        cwd=repo_path,
-        capture_output=True,
-    )
-    if ref_check.returncode != 0:
-        checkout_ref = pr.source_commit
-
-    subprocess.run(
-        ['git', 'worktree', 'add', str(worktree_dir), checkout_ref, '--detach'],
-        cwd=repo_path,
-        check=True,
-        capture_output=True,
-    )
 
     if not worktree_dir.exists():
         raise RuntimeError(f'Worktree creation succeeded but directory does not exist: {worktree_dir}')
@@ -103,20 +123,24 @@ def create_worktree(repo_path: str, pr: PRInfo) -> str:
 def cleanup_worktree(repo_path: str, pr: PRInfo):
     worktree_dir = Path(repo_path) / '.reviewd-worktrees' / f'pr-{pr.pr_id}'
     if worktree_dir.exists():
-        subprocess.run(
-            ['git', 'worktree', 'remove', str(worktree_dir), '--force'],
-            cwd=repo_path,
-            capture_output=True,
-        )
+        with _repo_locks[repo_path]:
+            subprocess.run(
+                ['git', 'worktree', 'remove', str(worktree_dir), '--force'],
+                cwd=repo_path,
+                capture_output=True,
+                env=_GIT_ENV,
+            )
         logger.info('Cleaned up worktree at %s', worktree_dir)
 
 
 def get_diff_lines(repo_path: str, pr: PRInfo) -> int:
-    subprocess.run(
-        ['git', 'fetch', 'origin', pr.source_branch, pr.destination_branch],
-        cwd=repo_path,
-        capture_output=True,
-    )
+    with _repo_locks[repo_path]:
+        subprocess.run(
+            ['git', 'fetch', 'origin', pr.source_branch, pr.destination_branch],
+            cwd=repo_path,
+            capture_output=True,
+            env=_GIT_ENV,
+        )
     result = subprocess.run(
         ['git', 'diff', '--shortstat', f'origin/{pr.destination_branch}...origin/{pr.source_branch}'],
         cwd=repo_path,
@@ -195,6 +219,8 @@ def invoke_cli(
                 text=True,
                 env=env,
             )
+            with _active_procs_lock:
+                _active_procs.add(proc)
         except FileNotFoundError as e:
             raise RuntimeError(
                 f'"{cli.value}" CLI not found. Install it first: https://github.com/anthropics/claude-code'
@@ -237,6 +263,8 @@ def invoke_cli(
                 proc.wait()
             raise
         finally:
+            with _active_procs_lock:
+                _active_procs.discard(proc)
             stop_event.set()
             stderr_thread.join(timeout=5)
             ticker_thread.join(timeout=5)
