@@ -18,7 +18,6 @@ from reviewd.colors import BOLD_WHITE, CLEAR_LINE, CYAN, DIM, GREEN, RESET, WHIT
 from reviewd.commenter import post_review
 from reviewd.config import get_provider, load_project_config
 from reviewd.models import GlobalConfig, PRInfo, ProjectConfig, RepoConfig
-from reviewd.providers.base import GitProvider
 from reviewd.reviewer import cleanup_stale_worktrees, get_diff_lines, review_pr, terminate_all
 from reviewd.state import StateDB
 
@@ -117,7 +116,6 @@ def _process_pr(
     repo_config: RepoConfig,
     project_config: ProjectConfig,
     global_config: GlobalConfig,
-    provider: GitProvider,
     state_db: StateDB,
     dry_run: bool = False,
     force: bool = False,
@@ -158,6 +156,7 @@ def _process_pr(
         repo_config.name,
         pr.title,
     )
+    provider = get_provider(global_config, repo_config)
     state_db.start_review(pr.repo_slug, pr.pr_id, pr.source_commit)
 
     progress_callback = None
@@ -199,7 +198,7 @@ def _collect_eligible_prs(
     repo_config: RepoConfig,
     global_config: GlobalConfig,
     state_db: StateDB,
-) -> list[tuple[PRInfo, RepoConfig, ProjectConfig, GlobalConfig, GitProvider]]:
+) -> list[tuple[PRInfo, RepoConfig, ProjectConfig, GlobalConfig]]:
     provider = get_provider(global_config, repo_config)
     project_config = load_project_config(repo_config.path, global_config)
 
@@ -220,7 +219,7 @@ def _collect_eligible_prs(
                 remaining = int(project_config.review_cooldown_minutes - minutes)
                 logger.debug('PR #%d in cooldown (%dmin remaining), skipping', pr.pr_id, remaining)
                 continue
-        eligible.append((pr, repo_config, project_config, global_config, provider))
+        eligible.append((pr, repo_config, project_config, global_config))
     return eligible
 
 
@@ -332,11 +331,11 @@ def run_poll_loop(
 
             # Submit new reviews, skip PRs already in-flight
             in_flight = {(p.repo_slug, p.pr_id) for p in futures.values()}
-            for pr, repo_cfg, proj_cfg, glob_cfg, prov in all_eligible:
+            for pr, repo_cfg, proj_cfg, glob_cfg in all_eligible:
                 if (pr.repo_slug, pr.pr_id) in in_flight:
                     continue
                 future = executor.submit(
-                    _process_pr, pr, repo_cfg, proj_cfg, glob_cfg, prov, state_db, dry_run=dry_run,
+                    _process_pr, pr, repo_cfg, proj_cfg, glob_cfg, state_db, dry_run=dry_run,
                 )
                 futures[future] = pr
                 in_flight.add((pr.repo_slug, pr.pr_id))
@@ -401,6 +400,6 @@ def review_single_pr(
 
     try:
         pr = provider.get_pr(repo_config.slug, pr_id)
-        _process_pr(pr, repo_config, project_config, global_config, provider, state_db, dry_run=dry_run, force=force)
+        _process_pr(pr, repo_config, project_config, global_config, state_db, dry_run=dry_run, force=force)
     finally:
         state_db.close()

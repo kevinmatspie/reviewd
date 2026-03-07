@@ -369,7 +369,8 @@ def run_wizard():
 
 
 def _run_wizard_inner():
-    config_dir = Path('~/.config/reviewd').expanduser()
+    config_home = os.environ.get('XDG_CONFIG_HOME', '~/.config')
+    config_dir = Path(config_home).expanduser() / 'reviewd'
     config_path = config_dir / 'config.yaml'
 
     setup_mode = questionary.select(
