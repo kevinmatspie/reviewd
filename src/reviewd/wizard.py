@@ -219,13 +219,13 @@ def _build_global_config_yaml(
 
     if github_token:
         lines.append('github:')
-        lines.append(f'  token: {github_token}')
+        lines.append(f'  token: "{github_token}"')
         lines.append('')
 
     if bitbucket_creds:
         lines.append('bitbucket:')
         for ws, cred in sorted(bitbucket_creds.items()):
-            lines.append(f'  {ws}: {cred}')
+            lines.append(f'  {ws}: "{cred}"')
         lines.append('')
 
     lines.append(f'cli: {cli}')

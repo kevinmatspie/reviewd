@@ -349,9 +349,18 @@ def run_poll_loop(
             # Sleep until next poll
             next_check = time.time() + poll_interval
             while time.time() < next_check and not _shutdown_event.is_set():
+                # Harvest completed futures during sleep to log errors promptly
+                done = [f for f in futures if f.done()]
+                for f in done:
+                    pr_info = futures.pop(f)
+                    try:
+                        f.result()
+                    except Exception:
+                        logger.exception('Review thread failed for PR #%d', pr_info.pr_id)
+
                 remaining = int(next_check - time.time())
                 now = datetime.now().strftime('%H:%M:%S')
-                active = len([f for f in futures if not f.done()])
+                active = len(futures)
                 suffix = f', {active} review(s) active' if active else ''
                 _status(f'[{now}] Next check in {remaining}s{suffix}')
                 time.sleep(min(remaining, 5))
