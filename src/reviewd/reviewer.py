@@ -287,13 +287,17 @@ def extract_json(output: str) -> dict:
         logger.error('No JSON block found in AI output. Last 500 chars:\n%s', tail)
         raise ValueError('No JSON block found in AI output')
     raw = matches[-1]
-    # Strip trailing commas before } or ] (common LLM JSON error)
-    raw = re.sub(r',\s*([}\]])', r'\1', raw)
     try:
         return json.loads(raw)
-    except json.JSONDecodeError as e:
-        logger.error('Malformed JSON in AI output: %s\nRaw JSON:\n%s', e, raw[:1000])
-        raise ValueError(f'Malformed JSON in AI output: {e}') from e
+    except json.JSONDecodeError:
+        # Strip trailing commas before } or ] (common LLM JSON error) and retry
+        fixed = re.sub(r',\s*([}\]])', r'\1', raw)
+        try:
+            logger.warning('Fixed trailing commas in AI JSON output')
+            return json.loads(fixed)
+        except json.JSONDecodeError as e:
+            logger.error('Malformed JSON in AI output: %s\nRaw JSON:\n%s', e, raw[:1000])
+            raise ValueError(f'Malformed JSON in AI output: {e}') from e
 
 
 def parse_review_result(data: dict) -> ReviewResult:
