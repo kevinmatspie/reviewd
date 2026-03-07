@@ -55,7 +55,9 @@ def _format_summary_comment(
     model: str | None = None,
     approved: bool = False,
 ) -> str:
-    lines = [f'## {global_config.review_title}', '']
+    cli_name = (model or cli.value).capitalize()
+    title = global_config.review_title.replace('{cli}', cli_name)
+    lines = [f'## {title}', '']
     if project_config.show_overview and result.overview:
         lines.extend([result.overview, ''])
 
@@ -90,8 +92,7 @@ def _format_summary_comment(
         lines.append(f'**Auto-approve rationale:** {result.approve_reason}')
         lines.append('')
 
-    powered_by = model or cli.value
-    lines.append(f'*{global_config.footer} Powered by {powered_by}.*')
+    lines.append(f'*{global_config.footer}*')
     lines.append('*Replies to this comment are not monitored.*')
 
     return '\n'.join(lines)
