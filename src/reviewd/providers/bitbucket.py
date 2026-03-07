@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 import httpx
 
@@ -12,16 +13,25 @@ logger = logging.getLogger(__name__)
 BOT_MARKER = '[](reviewd)'
 BB_API_BASE = 'https://api.bitbucket.org/2.0'
 
+# Matches "user@domain:token" format for Basic auth (email:token)
+_BASIC_AUTH_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+:.+$')
+
 
 class BitbucketProvider(GitProvider):
     def __init__(self, workspace: str, auth_token: str):
         self.workspace = workspace
+        # auth_token can be "email:token" (Basic auth) or a plain OAuth token (Bearer)
+        if _BASIC_AUTH_RE.match(auth_token):
+            email, token = auth_token.split(':', 1)
+            auth = (email, token)
+            headers = {'Content-Type': 'application/json'}
+        else:
+            auth = None
+            headers = {'Authorization': f'Bearer {auth_token}', 'Content-Type': 'application/json'}
         self.client = httpx.Client(
             base_url=BB_API_BASE,
-            headers={
-                'Authorization': f'Bearer {auth_token}',
-                'Content-Type': 'application/json',
-            },
+            auth=auth,
+            headers=headers,
             timeout=30,
         )
 
@@ -61,7 +71,7 @@ class BitbucketProvider(GitProvider):
             author=data['author']['display_name'],
             source_branch=data['source']['branch']['name'],
             destination_branch=data['destination']['branch']['name'],
-            source_commit=data['source']['commit']['hash'],
+            source_commit=data['source']['commit']['hash'] if data['source'].get('commit') else '',
             url=data['links']['html']['href'],
             draft=data.get('draft', False),
         )
@@ -116,8 +126,8 @@ class BitbucketProvider(GitProvider):
         return False
 
     def approve_pr(self, repo_slug: str, pr_id: int) -> None:
-        url = f'{BB_API_BASE}/repositories/{self.workspace}/{repo_slug}/pullrequests/{pr_id}/approve'
-        resp = httpx.post(url, headers={'Authorization': self.client.headers['Authorization']})
+        url = f'/repositories/{self.workspace}/{repo_slug}/pullrequests/{pr_id}/approve'
+        resp = self.client.post(url)
         if resp.status_code == 400:
             logger.debug('Cannot approve PR #%d (likely self-approve): %s', pr_id, resp.text[:200])
             return

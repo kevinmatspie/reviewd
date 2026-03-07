@@ -52,10 +52,11 @@ def _format_summary_comment(
     global_config: GlobalConfig,
     project_config: ProjectConfig,
     cli: CLI = CLI.CLAUDE,
-    model: str | None = None,
     approved: bool = False,
 ) -> str:
-    lines = [f'## {global_config.review_title}', '']
+    cli_name = cli.value.capitalize()
+    title = global_config.review_title.replace('{cli}', cli_name)
+    lines = [f'## {title}', '']
     if project_config.show_overview and result.overview:
         lines.extend([result.overview, ''])
 
@@ -90,8 +91,7 @@ def _format_summary_comment(
         lines.append(f'**Auto-approve rationale:** {result.approve_reason}')
         lines.append('')
 
-    powered_by = model or cli.value
-    lines.append(f'*{global_config.footer} Powered by {powered_by}.*')
+    lines.append(f'*{global_config.footer}*')
     lines.append('*Replies to this comment are not monitored.*')
 
     return '\n'.join(lines)
@@ -145,7 +145,6 @@ def post_review(
     project_config: ProjectConfig,
     global_config: GlobalConfig,
     cli: CLI = CLI.CLAUDE,
-    model: str | None = None,
     dry_run: bool = False,
     diff_lines: int | None = None,
 ):
@@ -196,7 +195,6 @@ def post_review(
             global_config,
             project_config,
             cli,
-            model=model,
             diff_lines=diff_lines,
         )
         return
@@ -240,7 +238,7 @@ def post_review(
 
     logger.info('Posting summary comment')
     summary_body = _format_summary_comment(
-        result, inline_ids, global_config, project_config, cli, model=model, approved=approved
+        result, inline_ids, global_config, project_config, cli, approved=approved
     )
     comment_id = provider.post_comment(pr.repo_slug, pr.pr_id, summary_body)
     state_db.record_comment(pr.repo_slug, pr.pr_id, comment_id)
@@ -260,7 +258,6 @@ def _print_dry_run(
     global_config: GlobalConfig,
     project_config: ProjectConfig,
     cli: CLI = CLI.CLAUDE,
-    model: str | None = None,
     diff_lines: int | None = None,
 ):
     print('\n' + '=' * 60)
@@ -284,7 +281,7 @@ def _print_dry_run(
 
     print('\n--- Summary Comment ---')
     print(
-        _format_summary_comment(result, inline_ids, global_config, project_config, cli, model=model, approved=approved)
+        _format_summary_comment(result, inline_ids, global_config, project_config, cli, approved=approved)
     )
 
     if aa.enabled and approved:

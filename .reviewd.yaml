@@ -1,0 +1,15 @@
+# Project-specific review instructions (merged with global instructions)
+# instructions: |
+#   Python 3.12+, Django 5.x.
+#   Check for missing select_related/prefetch_related.
+
+# Commands to run in the PR worktree before reviewing
+# test_commands:
+#   - uv run ruff check .
+#   - uv run pytest tests/ -x -q
+
+# Which severities get inline comments (vs summary only)
+inline_comments_for: [critical]
+
+# Skip posting findings of these severities entirely
+# skip_severities: [nitpick]

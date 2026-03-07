@@ -18,6 +18,7 @@
 - **Reuses what you already have** — your local git repos, your Claude/Gemini CLI subscription, your existing credentials. Nothing new to install or pay for.
 - **Full codebase context** — reviews run on your actual local repos, not shallow CI clones. The AI can read any file, follow imports, and understand the full picture.
 - **Fast via git worktrees** — isolated checkouts that share `.git`. No re-cloning. Reviews start in milliseconds.
+- **Parallel reviews** — concurrent PR processing with configurable concurrency. Per-repo git locks, thread-safe SQLite, graceful shutdown.
 - **Runs real commands** — configure linters, type checkers, and test suites to run during review. Failures are included in the AI's analysis.
 - **Structured output** — severity-tagged findings with inline comments on specific lines and a summary comment.
 - **Daemon or one-shot** — background polling across all repos, or single PR reviews on demand. Dry-run mode to preview.
@@ -28,6 +29,7 @@
 - **Critical tasks** — optionally creates a BitBucket PR task on critical findings to block merge.
 - **Spam protection** — configurable diff size thresholds, cooldowns, and title/author skip patterns.
 - **Auto-sync config** — automatically pulls `.reviewd.yaml` from remote when the working copy is clean.
+- **VPS / headless ready** — runs as a systemd service, no TTY needed. Non-interactive git, graceful shutdown, PID lock, XDG paths, env var substitution for secrets.
 
 ## Quick Start
 
@@ -48,19 +50,20 @@ Requires Python 3.12+. You also need `claude` or `gemini` CLI installed and auth
 ### 2. Configure
 
 ```bash
-reviewd init   # set up global config + per-project .reviewd.yaml
+reviewd init   # interactive wizard — detects repos, guides token creation, writes config
 ```
+
+The wizard scans your repos, detects GitHub/BitBucket remotes, validates credentials, and writes both global and per-project configs. Prefer YAML? Choose "Sample config file" to get an annotated template instead.
 
 <details>
 <summary><b>GitHub setup</b></summary>
 
-1. Create a [Personal Access Token](https://github.com/settings/tokens) with the **`repo`** scope.
-2. Export it: `export GITHUB_TOKEN=ghp_...`
-3. Config:
+1. Create a [Fine-grained Personal Access Token](https://github.com/settings/personal-access-tokens/new) with **Pull requests: Read & Write**.
+2. Config:
 
 ```yaml
 github:
-  token: ${GITHUB_TOKEN}
+  token: ghp_YOUR_TOKEN
 
 repos:
   - name: my-repo
@@ -74,24 +77,24 @@ repos:
 <details>
 <summary><b>BitBucket setup</b></summary>
 
-1. Create an [App Password](https://bitbucket.org/account/settings/app-passwords/) with **Pull requests: Read** and **Write**.
-2. Export it: `export BB_AUTH_TOKEN=ATCTT3x...`
-3. Config:
+1. Create an [API token with scopes](https://id.atlassian.com/manage-profile/security/api-tokens) — select app: Bitbucket, scopes: `read:pullrequest:bitbucket`, `write:pullrequest:bitbucket`, `read:repository:bitbucket`.
+2. Config (format is `email:token`):
 
 ```yaml
 bitbucket:
-  your-workspace: ${BB_AUTH_TOKEN}
+  your-workspace: you@example.com:ATATT3x...
 
 repos:
   - name: my-project
     path: ~/repos/my-project
     provider: bitbucket
     workspace: your-workspace
+    repo_slug: repo-slug
 ```
 
 </details>
 
-Both providers can be used in the same config.
+Both providers can be used in the same config. Tokens support `${ENV_VAR}` substitution.
 
 ### 3. Review
 
@@ -119,18 +122,19 @@ Poll API → Check State (SQLite) → Fetch & Worktree → AI Review (Claude/Gem
 
 ```yaml
 poll_interval_seconds: 60
+max_concurrent_reviews: 4
 
 github:
   token: ${GITHUB_TOKEN}
 
 bitbucket:
-  your-workspace: ${BB_AUTH_TOKEN}
-  other-workspace: ${OTHER_BB_TOKEN}
+  your-workspace: you@example.com:${BB_API_TOKEN}
+  other-workspace: other@example.com:${OTHER_BB_TOKEN}
 
 cli: claude                    # or "gemini"
 # model: claude-sonnet-4-5-20250514
 
-# review_title: "Code Review by Nea' ~~Caisă~~ Claudiu"
+# review_title: "review'd by {cli}"
 # footer: "Automated review by ..."
 # skip_title_patterns: ['[no-review]', '[wip]', '[no-claudiu]']
 # skip_authors: []
@@ -207,11 +211,13 @@ All gates must pass — if any one blocks, the PR is not approved. The `rules` f
 ## CLI Reference
 
 ```bash
-reviewd init                                  # set up global + project config
+reviewd init                                  # interactive setup wizard
+reviewd init --sample                         # write sample config (non-interactive)
 reviewd ls                                    # list repos and open PRs
 reviewd watch -v                              # daemon mode
 reviewd watch -v --dry-run                    # preview, no posting
 reviewd watch -v --review-existing            # review not-yet-reviewed open PRs
+reviewd watch --concurrency 8                 # override max concurrent reviews
 reviewd pr <repo> <id>                        # one-shot review
 reviewd pr <repo> <id> --force                # re-review (bypasses draft/skip)
 reviewd status <repo>                         # review history
@@ -223,7 +229,7 @@ reviewd status <repo>                         # review history
 - **Git worktrees** — near-instant isolated checkouts
 - **Full AI tool access** — the AI reads files, runs commands, explores code
 - **JSON schema** — structured findings, the tool just parses and posts
-- **SQLite state** — tracks `(repo, pr_id, commit)` to avoid duplicates
+- **SQLite state** — WAL mode, thread-safe, tracks `(repo, pr_id, commit)` to avoid duplicates
 - **Provider abstraction** — GitHub and BitBucket, extensible
 
 ## Security
@@ -246,9 +252,88 @@ reviewd status <repo>                         # review history
 - Per-project config (`.reviewd.yaml`) is read from the main repo, not the worktree — PR authors can't inject instructions
 - `test_commands` come only from the repo owner's config, not from PR content
 
+## Headless / VPS Deployment
+
+reviewd runs fully headless — no TTY, no interactive prompts in the daemon path. Deploy it on a VPS alongside your AI CLI and forget about it.
+
+### Quick setup
+
+```bash
+# 1. Install
+pip install reviewd
+
+# 2. Write sample config (non-interactive, no wizard)
+reviewd init --sample
+
+# 3. Edit config — add tokens, repos, paths
+vim ~/.config/reviewd/config.yaml
+
+# 4. Clone repos with deploy keys
+git clone git@github.com:org/repo.git ~/repos/repo
+
+# 5. Run as daemon
+reviewd watch -v
+```
+
+### What makes it VPS-ready
+
+- **`reviewd init --sample`** — writes an annotated config template without prompts. No TTY required.
+- **`GIT_TERMINAL_PROMPT=0`** on all git operations — if SSH keys or credentials aren't set up, git fails fast instead of hanging waiting for a password.
+- **`-v` flag** — disables the terminal status line (carriage returns, ANSI escape codes). Output becomes clean newline-separated log lines, suitable for journald or any log collector.
+- **Signal handling** — SIGTERM/SIGINT trigger graceful shutdown: in-progress reviews finish, worktrees are cleaned up, state DB is closed. Works with systemd `Type=simple`.
+- **PID lock** — prevents duplicate instances (`~/.local/share/reviewd/reviewd.pid`).
+- **XDG paths** — config, state, and cache directories respect `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_CACHE_HOME`. Deploy to any user/path.
+- **`${ENV_VAR}` substitution** in config — keep tokens in environment variables or secrets managers instead of plaintext YAML.
+- **Per-project config auto-pulls** — `.reviewd.yaml` is re-read on every review cycle and auto-pulled from remote if the working copy is clean. Push config changes and they take effect without restarting.
+- **Claude `--print` works headless** — no TTY needed, reads prompt from stdin, writes to stdout/stderr.
+- **Gemini `--approval-mode yolo -e none`** — no approval prompts, no extensions, fully non-interactive.
+
+### systemd service example
+
+```ini
+[Unit]
+Description=reviewd — AI code review daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=reviewd
+ExecStart=/usr/local/bin/reviewd watch -v
+Restart=on-failure
+RestartSec=30
+Environment=XDG_CONFIG_HOME=/home/reviewd/.config
+Environment=XDG_DATA_HOME=/home/reviewd/.local/share
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Deploy key setup
+
+```bash
+# Generate a deploy key per repo
+ssh-keygen -t ed25519 -f ~/.ssh/repo_deploy_key -N ""
+
+# Add public key to GitHub/BitBucket as a deploy key (read-only is fine)
+# Configure SSH to use it
+cat >> ~/.ssh/config <<EOF
+Host github.com
+  IdentityFile ~/.ssh/repo_deploy_key
+  IdentitiesOnly yes
+EOF
+
+# Test non-interactive access
+GIT_TERMINAL_PROMPT=0 git fetch origin
+```
+
+### Global config changes require restart
+
+The global config (`~/.config/reviewd/config.yaml`) is loaded once at startup. If you change poll interval, add repos, or rotate tokens, restart the service. Per-project `.reviewd.yaml` files are hot-reloaded on every review cycle.
+
 ## Roadmap
 
-- [ ] Parallel PR review queue — currently PRs are reviewed sequentially, which is fine for most teams since each review takes 1-3 minutes and the poll loop catches up quickly
+- [x] Parallel PR review queue
 - [ ] GitLab support
 
 ## Disclaimer
