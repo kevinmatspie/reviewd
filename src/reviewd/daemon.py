@@ -18,12 +18,19 @@ from reviewd.colors import BOLD_WHITE, CLEAR_LINE, CYAN, DIM, GREEN, RESET, WHIT
 from reviewd.commenter import post_review
 from reviewd.config import get_provider, load_project_config
 from reviewd.models import GlobalConfig, PRInfo, ProjectConfig, RepoConfig
-from reviewd.reviewer import cleanup_stale_worktrees, get_diff_lines, review_pr, terminate_all
+from reviewd.reviewer import DEFAULT_TIMEOUT, cleanup_stale_worktrees, get_diff_lines, review_pr, terminate_all
 from reviewd.state import StateDB
 
 logger = logging.getLogger(__name__)
 
 _shutdown_event = threading.Event()
+
+# Active reviews registry: {(repo_slug, pr_id): (repo_name, start_time)}
+_active_reviews: dict[tuple[str, int], tuple[str, float]] = {}
+_active_reviews_lock = threading.Lock()
+
+_SPINNER_FRAMES = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+_spinner_idx = 0
 
 
 def _retry_on_network_error(retries=2, delay=5):
@@ -78,13 +85,50 @@ def _release_pid_lock(lock_path: Path):
     lock_path.unlink(missing_ok=True)
 
 
+def _format_elapsed(elapsed: int, timeout: int = DEFAULT_TIMEOUT) -> str:
+    text = f'{elapsed}s'
+    if elapsed >= timeout * 0.8:
+        return f'{YELLOW}{text}{RESET}'
+    return text
+
+
+def _format_progress_bar(elapsed: int, timeout: int = DEFAULT_TIMEOUT, width: int = 10) -> str:
+    ratio = min(elapsed / timeout, 1.0)
+    filled = int(ratio * width)
+    bar = '█' * filled + '░' * (width - filled)
+    color = YELLOW if ratio >= 0.8 else ''
+    reset = RESET if color else ''
+    return f'{color}{bar}{reset}'
+
+
+def _build_review_status() -> str:
+    global _spinner_idx
+    with _active_reviews_lock:
+        if not _active_reviews:
+            return ''
+        _spinner_idx = (_spinner_idx + 1) % len(_SPINNER_FRAMES)
+        spinner = _SPINNER_FRAMES[_spinner_idx]
+        now = time.monotonic()
+        parts = []
+        for (_slug, pr_id), (repo_name, start) in _active_reviews.items():
+            elapsed = int(now - start)
+            bar = _format_progress_bar(elapsed)
+            parts.append(f'#{pr_id} {repo_name} {bar} {_format_elapsed(elapsed)}')
+        return f'{CYAN}{spinner}{RESET} ' + ' · '.join(parts)
+
+
 def _status(msg: str, *, clear: bool = True):
     if _is_verbose:
         return
-    if clear:
-        sys.stderr.write(f'{CLEAR_LINE}{msg}')
+    review_status = _build_review_status()
+    if review_status:
+        line = f'{CLEAR_LINE}{msg} {DIM}|{RESET} {review_status}'
     else:
-        sys.stderr.write(f'{CLEAR_LINE}{msg}\n')
+        line = f'{CLEAR_LINE}{msg}'
+    if clear:
+        sys.stderr.write(line)
+    else:
+        sys.stderr.write(f'{line}\n')
     sys.stderr.flush()
 
 
@@ -163,8 +207,10 @@ def _process_pr(
     )
     provider = get_provider(global_config, repo_config)
     state_db.start_review(pr.repo_slug, pr.pr_id, pr.source_commit)
+    review_key = (pr.repo_slug, pr.pr_id)
 
-    progress_callback = None
+    with _active_reviews_lock:
+        _active_reviews[review_key] = (repo_config.name, time.monotonic())
 
     try:
         result = review_pr(
@@ -175,7 +221,6 @@ def _process_pr(
             model=repo_config.model or global_config.model,
             cli_args=global_config.cli_args,
             cli_defaults=global_config.cli_defaults,
-            progress_callback=progress_callback,
         )
         if _shutdown_event.is_set():
             state_db.finish_review(pr.repo_slug, pr.pr_id, pr.source_commit, error='shutdown')
@@ -196,6 +241,9 @@ def _process_pr(
     except Exception as e:
         state_db.finish_review(pr.repo_slug, pr.pr_id, pr.source_commit, error=str(e))
         logger.exception('Failed to review PR #%d', pr.pr_id)
+    finally:
+        with _active_reviews_lock:
+            _active_reviews.pop(review_key, None)
 
 
 @_retry_on_network_error()
@@ -296,9 +344,29 @@ def run_poll_loop(
     executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='review')
     futures: dict[Future, PRInfo] = {}
 
+    _force_quit = False
+
     def _handle_shutdown(_signum, _frame):
+        nonlocal _force_quit
+        if _shutdown_event.is_set():
+            _force_quit = True
+            sys.stderr.write(f'\n{YELLOW}Force quit — killing all reviews...{RESET}\n')
+            sys.stderr.flush()
+            terminate_all()
+            raise SystemExit(1)
         _shutdown_event.set()
         terminate_all()
+        with _active_reviews_lock:
+            active = list(_active_reviews.items())
+        if active:
+            prs = ', '.join(f'#{pr_id}' for (_slug, pr_id), _ in active)
+            sys.stderr.write(
+                f'\n{YELLOW}Shutting down gracefully, waiting for {prs} to finish...{RESET}'
+                f'\n{DIM}Press Ctrl+C again to force quit{RESET}\n'
+            )
+        else:
+            sys.stderr.write(f'\n{YELLOW}Shutting down...{RESET}\n')
+        sys.stderr.flush()
 
     signal.signal(signal.SIGINT, _handle_shutdown)
     signal.signal(signal.SIGTERM, _handle_shutdown)
@@ -354,11 +422,6 @@ def run_poll_loop(
                 futures[future] = pr
                 in_flight.add((pr.repo_slug, pr.pr_id))
 
-            if futures:
-                active = len([f for f in futures if not f.done()])
-                if active:
-                    _status(f'[{now}] {active} review(s) in progress')
-
             # Sleep until next poll
             next_check = time.time() + poll_interval
             while time.time() < next_check and not _shutdown_event.is_set():
@@ -373,15 +436,15 @@ def run_poll_loop(
 
                 remaining = max(0, int(next_check - time.time()))
                 now = datetime.now().strftime('%H:%M:%S')
-                active = len(futures)
-                suffix = f', {active} review(s) active' if active else ''
-                _status(f'[{now}] Next check in {remaining}s{suffix}')
-                time.sleep(min(remaining, 5))
+                _status(f'[{now}] Next check in {remaining}s')
+                time.sleep(min(remaining, 2))
     finally:
         _shutdown_event.set()
         terminate_all()
-        logger.info('Waiting for in-progress reviews to finish...')
-        executor.shutdown(wait=True, cancel_futures=True)
+        if not _force_quit:
+            executor.shutdown(wait=True, cancel_futures=True)
+        else:
+            executor.shutdown(wait=False, cancel_futures=True)
         _status('', clear=True)
         _release_pid_lock(lock_path)
         state_db.close()

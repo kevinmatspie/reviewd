@@ -8,7 +8,7 @@ from pathlib import Path
 
 import click
 
-from reviewd.colors import BOLD_RED, CYAN, DIM, GREEN, RED, RESET, YELLOW
+from reviewd.colors import BOLD_RED, CLEAR_LINE, CYAN, DIM, GREEN, RED, RESET, YELLOW
 from reviewd.config import get_provider, load_global_config
 from reviewd.daemon import review_single_pr, run_poll_loop
 from reviewd.models import CLI, GlobalConfig
@@ -54,7 +54,8 @@ class _ColorFormatter(logging.Formatter):
         record.levelname = f'{color}{record.levelname:<8}{RESET}'
         if color:
             record.msg = f'{color}{record.msg}{RESET}'
-        return super().format(record)
+        # Clear any in-place status line before writing the log line
+        return CLEAR_LINE + super().format(record)
 
 
 def _setup_logging(verbose: bool):

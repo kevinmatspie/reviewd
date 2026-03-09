@@ -10,7 +10,6 @@ import tempfile
 import threading
 import time
 from collections import defaultdict
-from collections.abc import Callable
 from pathlib import Path
 
 from reviewd.models import (
@@ -253,7 +252,6 @@ def invoke_cli(
     model: str | None = None,
     cli_args: list[str] | None = None,
     cli_defaults: dict[CLI, list[str]] | None = None,
-    progress_callback: Callable[[str], None] | None = None,
 ) -> str:
     with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
         f.write(prompt)
@@ -304,7 +302,6 @@ def invoke_cli(
             proc.stdin = None
 
         stderr_lines: list[str] = []
-        stop_event = threading.Event()
 
         def _stream_stderr():
             for line in proc.stderr or []:
@@ -312,20 +309,8 @@ def invoke_cli(
                 stderr_lines.append(line)
                 logger.debug('[%s] %s', cli.value, line)
 
-        def _progress_ticker():
-            t0 = time.monotonic()
-            while not stop_event.wait(30):
-                elapsed = int(time.monotonic() - t0)
-                msg = f'{cli.value} review in progress... ({elapsed}s elapsed)'
-                if progress_callback:
-                    progress_callback(msg)
-                else:
-                    logger.info('%s', msg)
-
         stderr_thread = threading.Thread(target=_stream_stderr, daemon=True)
         stderr_thread.start()
-        ticker_thread = threading.Thread(target=_progress_ticker, daemon=True)
-        ticker_thread.start()
 
         try:
             stdout, _ = proc.communicate(timeout=timeout)
@@ -340,11 +325,7 @@ def invoke_cli(
         finally:
             with _active_procs_lock:
                 _active_procs.discard(proc)
-            stop_event.set()
             stderr_thread.join(timeout=5)
-            ticker_thread.join(timeout=5)
-            if progress_callback:
-                progress_callback('')
 
         stderr = '\n'.join(stderr_lines)
         if proc.returncode != 0:
@@ -450,7 +431,6 @@ def review_pr(
     model: str | None = None,
     cli_args: list[str] | None = None,
     cli_defaults: dict[CLI, list[str]] | None = None,
-    progress_callback: Callable[[str], None] | None = None,
 ) -> ReviewResult:
     worktree_path = create_worktree(repo_path, pr)
     try:
@@ -464,7 +444,6 @@ def review_pr(
             model=model,
             cli_args=cli_args,
             cli_defaults=cli_defaults,
-            progress_callback=progress_callback,
         )
         elapsed = time.monotonic() - t0
         logger.info('AI review completed in %.1fs', elapsed)
