@@ -58,9 +58,6 @@ def _retry_on_network_error(retries=2, delay=5):
     return decorator
 
 
-_is_verbose = False
-
-
 def _get_pid_lock_path(state_db_path: str) -> Path:
     return Path(state_db_path).parent / 'reviewd.pid'
 
@@ -118,8 +115,6 @@ def _build_review_status() -> str:
 
 
 def _status(msg: str, *, clear: bool = True):
-    if _is_verbose:
-        return
     review_status = _build_review_status()
     if review_status:
         line = f'{CLEAR_LINE}{msg} {DIM}|{RESET} {review_status}'
@@ -322,8 +317,6 @@ def run_poll_loop(
     review_existing: bool = False,
     verbose: bool = False,
 ):
-    global _is_verbose
-    _is_verbose = verbose
     _shutdown_event.clear()
 
     state_db = StateDB(global_config.state_db)
