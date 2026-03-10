@@ -125,12 +125,12 @@ class BitbucketProvider(GitProvider):
         logger.warning('Failed to delete comment %d: status=%d body=%s', comment_id, resp.status_code, resp.text[:200])
         return False
 
-    def approve_pr(self, repo_slug: str, pr_id: int) -> None:
+    def approve_pr(self, repo_slug: str, pr_id: int) -> bool:
         url = f'/repositories/{self.workspace}/{repo_slug}/pullrequests/{pr_id}/approve'
         resp = self.client.post(url)
         if resp.status_code == 400:
-            logger.debug('Cannot approve PR #%d (likely self-approve): %s', pr_id, resp.text[:200])
-            return
+            logger.warning('Cannot approve PR #%d: %s', pr_id, resp.text[:200])
+            return False
         if resp.status_code >= 400:
             logger.error(
                 'Failed to approve PR #%d: %d %s',
@@ -138,9 +138,10 @@ class BitbucketProvider(GitProvider):
                 resp.status_code,
                 resp.text,
             )
-            return
+            return False
         resp.raise_for_status()
         logger.info('Approved PR #%d', pr_id)
+        return True
 
     def list_tasks(self, repo_slug: str, pr_id: int) -> list[dict]:
         url = f'/repositories/{self.workspace}/{repo_slug}/pullrequests/{pr_id}/tasks'

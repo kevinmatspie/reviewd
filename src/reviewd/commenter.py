@@ -237,17 +237,14 @@ def post_review(
             approved = True
 
     logger.info('Posting summary comment')
-    summary_body = _format_summary_comment(
-        result, inline_ids, global_config, project_config, cli, approved=approved
-    )
+    summary_body = _format_summary_comment(result, inline_ids, global_config, project_config, cli, approved=approved)
     comment_id = provider.post_comment(pr.repo_slug, pr.pr_id, summary_body)
     state_db.record_comment(pr.repo_slug, pr.pr_id, comment_id)
 
     if project_config.critical_task and hasattr(provider, 'list_tasks'):
         _sync_critical_task(provider, pr, result, project_config)
 
-    if approved:
-        provider.approve_pr(pr.repo_slug, pr.pr_id)
+    if approved and provider.approve_pr(pr.repo_slug, pr.pr_id):
         logger.info('Auto-approved PR #%d', pr.pr_id)
 
 
@@ -280,9 +277,7 @@ def _print_dry_run(
             approved = True
 
     print('\n--- Summary Comment ---')
-    print(
-        _format_summary_comment(result, inline_ids, global_config, project_config, cli, approved=approved)
-    )
+    print(_format_summary_comment(result, inline_ids, global_config, project_config, cli, approved=approved))
 
     if aa.enabled and approved:
         print('\n--- Auto-Approve: WOULD APPROVE ---')
