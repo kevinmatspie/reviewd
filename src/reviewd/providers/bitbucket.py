@@ -129,7 +129,11 @@ class BitbucketProvider(GitProvider):
         url = f'/repositories/{self.workspace}/{repo_slug}/pullrequests/{pr_id}/approve'
         resp = self.client.post(url)
         if resp.status_code == 400:
-            logger.warning('Cannot approve PR #%d: %s', pr_id, resp.text[:200])
+            try:
+                detail = resp.json().get('error', {}).get('message', resp.text[:200])
+            except Exception:
+                detail = resp.text[:200]
+            logger.warning('Cannot approve PR #%d: %s', pr_id, detail)
             return False
         if resp.status_code >= 400:
             logger.error(
