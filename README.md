@@ -77,13 +77,29 @@ repos:
 <details>
 <summary><b>BitBucket setup</b></summary>
 
-1. Create an [API token with scopes](https://id.atlassian.com/manage-profile/security/api-tokens) — select app: Bitbucket, scopes: `read:pullrequest:bitbucket`, `write:pullrequest:bitbucket`, `read:repository:bitbucket`.
-2. Config (format is `email:token`):
+Two token types — pick one:
+
+**Option A: Workspace Access Token** (recommended) — acts as a bot identity with workspace-level access:
+1. Go to Settings gear → **Workspace settings** → Security → **[Access tokens](https://bitbucket.org/{workspace}/workspace/settings/access-tokens)**
+2. Create access token with Permissions: Pull requests → Read + Write
 
 ```yaml
 bitbucket:
-  your-workspace: you@example.com:ATATT3x...
+  your-workspace: ATCTT3x...    # workspace token (Bearer auth)
+```
 
+**Option B: User API Token** — acts as your personal account:
+1. Create an [API token](https://id.atlassian.com/manage-profile/security/api-tokens) → app: Bitbucket → all scopes
+2. Grant the user access to repos in Workspace settings → User directory
+
+```yaml
+bitbucket:
+  your-workspace: you@example.com:ATATT3x...   # user token (Basic auth)
+```
+
+Then add your repos:
+
+```yaml
 repos:
   - name: my-project
     path: ~/repos/my-project

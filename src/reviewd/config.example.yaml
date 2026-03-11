@@ -10,11 +10,25 @@
 # github:
 #   token: ${GITHUB_TOKEN}
 
-# BitBucket (requires App Passwords with pullrequest:read + pullrequest:write)
-# Map workspace names to auth tokens:
+# BitBucket — two token types, pick one:
+#
+# Option A: Workspace Access Token (recommended)
+#   Acts as a bot identity with workspace-level repo access.
+#   Create at: https://bitbucket.org/{workspace}/workspace/settings/access-tokens
+#   (Settings gear → Workspace settings → Security → Access tokens)
+#   Permissions: Pull requests → Read + Write
+#   Format: workspace_name: token
+#
+# Option B: User API Token
+#   Acts as your personal account. Requires per-repo access granted separately.
+#   Create at: https://id.atlassian.com/manage-profile/security/api-tokens
+#   Scopes: app: Bitbucket → all scopes (or read/write:pullrequest + read:repository)
+#   Grant user repo access in: Workspace settings → User directory
+#   Format: workspace_name: email:token
+#
 # bitbucket:
-#   my-workspace: ${BB_AUTH_TOKEN}
-#   other-workspace: ${OTHER_BB_TOKEN}
+#   my-workspace: ${BB_WORKSPACE_TOKEN}              # workspace token (Bearer)
+#   # or: my-workspace: ${BB_EMAIL}:${BB_USER_TOKEN} # user token (Basic)
 
 # --- AI CLI settings ---
 

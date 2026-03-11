@@ -131,18 +131,27 @@ def _validate_github_token(token: str) -> str | None:
     return None
 
 
-def _validate_bitbucket_token(email: str, token: str) -> str | None:
+def _validate_bitbucket_token(token: str, email: str | None = None) -> str | None:
     try:
-        resp = httpx.get(
-            'https://api.bitbucket.org/2.0/user',
-            auth=(email, token),
-            timeout=10,
-        )
+        if email:
+            # User API token: Basic auth with email:token
+            resp = httpx.get(
+                'https://api.bitbucket.org/2.0/user',
+                auth=(email, token),
+                timeout=10,
+            )
+        else:
+            # Workspace access token: Bearer auth
+            resp = httpx.get(
+                'https://api.bitbucket.org/2.0/repositories?pagelen=1',
+                headers={'Authorization': f'Bearer {token}'},
+                timeout=10,
+            )
         if resp.status_code == 200:
-            return resp.json().get('display_name')
-        # 403 means credentials are valid but token lacks read:me scope — still OK
+            return resp.json().get('display_name', 'workspace token')
+        # 403 means credentials are valid but token lacks scope — still OK
         if resp.status_code == 403:
-            return email
+            return email or 'workspace token'
     except httpx.HTTPError:
         pass
     return None
@@ -175,40 +184,82 @@ def _prompt_github_token(repo_names: list[str]) -> str:
 
 
 def _prompt_bitbucket_tokens(bb_repos: list[dict]) -> dict[str, str]:
-    """Prompt for BitBucket credentials. Returns {workspace: 'email:token'}."""
+    """Prompt for BitBucket credentials. Returns {workspace: 'token' or 'email:token'}."""
     workspaces = list({r['workspace'] for r in bb_repos if r.get('workspace')})
     repos_str = ', '.join(click.style(r['name'], bold=True) for r in bb_repos)
     ws_str = ', '.join(workspaces)
     click.echo(f'  BitBucket repos: {repos_str} (workspace: {ws_str})')
     click.echo()
 
-    bb_url = 'https://id.atlassian.com/manage-profile/security/api-tokens'
-    click.echo('  Create a BitBucket API token:')
-    click.echo()
-    click.echo(f'    1. Go to {click.style(bb_url, fg="cyan", underline=True)}')
-    click.echo('    2. Click "Create API token with scopes"')
-    click.echo('    3. Set a name (e.g. "reviewd") and expiration')
-    click.echo('    4. Select app: Bitbucket')
-    click.echo('    5. Select scopes:')
-    click.echo('       • read:pullrequest:bitbucket')
-    click.echo('       • write:pullrequest:bitbucket')
-    click.echo('       • read:repository:bitbucket')
-    click.echo('    6. Create token and paste below')
-    click.echo()
+    token_type = questionary.select(
+        'Which type of BitBucket token?',
+        choices=[
+            questionary.Choice(
+                'Workspace access token — acts as a bot identity, workspace-level repo access',
+                value='workspace',
+            ),
+            questionary.Choice(
+                'User API token — acts as your personal account, needs per-repo permissions',
+                value='user',
+            ),
+        ],
+        style=STYLE,
+        instruction='(↑↓ move, enter select)',
+    ).unsafe_ask()
 
-    email = questionary.text('Atlassian account email:', style=STYLE).unsafe_ask()
+    if token_type == 'workspace':
+        click.echo()
+        click.echo('  Create a Workspace Access Token:')
+        click.echo()
+        for ws in workspaces:
+            ws_url = f'https://bitbucket.org/{ws}/workspace/settings/access-tokens'
+            click.echo(f'    1. Go to {click.style(ws_url, fg="cyan", underline=True)}')
+        click.echo('    2. Click "Create access token"')
+        click.echo('    3. Set a name (e.g. "reviewd") and expiration')
+        click.echo('    4. Permissions: Pull requests → Read + Write')
+        click.echo('    5. Create and paste below')
+        click.echo()
 
-    while True:
-        token = questionary.password('BitBucket API token:', style=STYLE).unsafe_ask()
-        if not token:
-            continue
-        click.echo('  Validating...')
-        display_name = _validate_bitbucket_token(email, token)
-        if display_name:
-            _success(f'Authenticated as {display_name}')
-            cred = f'{email}:{token}'
-            return {ws: cred for ws in workspaces}
-        _error('Invalid token, try again')
+        while True:
+            token = questionary.password('Workspace access token:', style=STYLE).unsafe_ask()
+            if not token:
+                continue
+            click.echo('  Validating...')
+            display_name = _validate_bitbucket_token(token)
+            if display_name:
+                _success(f'Authenticated as {display_name}')
+                return {ws: token for ws in workspaces}
+            _error('Invalid token, try again')
+    else:
+        click.echo()
+        click.echo('  Create a User API Token:')
+        click.echo()
+        bb_url = 'https://id.atlassian.com/manage-profile/security/api-tokens'
+        click.echo(f'    1. Go to {click.style(bb_url, fg="cyan", underline=True)}')
+        click.echo('    2. Click "Create API token with scopes"')
+        click.echo('    3. Set a name (e.g. "reviewd") and expiration')
+        click.echo('    4. Select app: Bitbucket')
+        click.echo('    5. Select scopes: all Bitbucket scopes (or at minimum:')
+        click.echo('       read:pullrequest, write:pullrequest, read:repository)')
+        click.echo('    6. Create token and paste below')
+        click.echo()
+        click.echo(click.style('  Note: ', fg='yellow') + 'The user must be granted access to each repo')
+        click.echo('  in Workspace settings → User directory, or via a group.')
+        click.echo()
+
+        email = questionary.text('Atlassian account email:', style=STYLE).unsafe_ask()
+
+        while True:
+            token = questionary.password('User API token:', style=STYLE).unsafe_ask()
+            if not token:
+                continue
+            click.echo('  Validating...')
+            display_name = _validate_bitbucket_token(token, email=email)
+            if display_name:
+                _success(f'Authenticated as {display_name}')
+                cred = f'{email}:{token}'
+                return {ws: cred for ws in workspaces}
+            _error('Invalid token, try again')
 
 
 def _build_global_config_yaml(
@@ -308,19 +359,25 @@ github:
   token: ghp_YOUR_TOKEN_HERE
 
 # ─── BitBucket ────────────────────────────────────────────────────────
-# Create an API token with scopes:
-#   1. Go to https://id.atlassian.com/manage-profile/security/api-tokens
-#   2. Click "Create API token with scopes"
+# Option A: Workspace Access Token (recommended)
+#   Acts as a bot identity with workspace-level repo access.
+#   1. Go to https://bitbucket.org/{workspace}/workspace/settings/access-tokens
+#      (Settings gear → Workspace settings → Security → Access tokens)
+#   2. Click "Create access token"
 #   3. Set a name (e.g. "reviewd") and expiration
-#   4. Select app: Bitbucket
-#   5. Select scopes:
-#      • read:pullrequest:bitbucket
-#      • write:pullrequest:bitbucket
-#      • read:repository:bitbucket
-#   6. Create token
-# Format: workspace_name: email:token
+#   4. Permissions: Pull requests → Read + Write
+#   Format: workspace_name: token
+#
+# Option B: User API Token
+#   Acts as your personal account. Requires per-repo access.
+#   1. Go to https://id.atlassian.com/manage-profile/security/api-tokens
+#   2. Create API token with scopes → app: Bitbucket → all scopes
+#   3. Grant user access to repos: Workspace settings → User directory
+#   Format: workspace_name: email:token
+#
 # bitbucket:
-#   my-workspace: me@example.com:ATATT3x...
+#   my-workspace: ATCTT3x...                    # workspace token
+#   # or: my-workspace: me@example.com:ATATT3x... # user token
 
 # ─── AI CLI ───────────────────────────────────────────────────────────
 cli: claude                           # claude, gemini, or codex
