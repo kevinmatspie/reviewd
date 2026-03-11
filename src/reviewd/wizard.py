@@ -485,8 +485,12 @@ def _run_wizard_inner():
         add_more = True
 
     if add_more:
+        _info('Enter the parent folder that contains your git repos.')
+        _info('e.g. ~/projects — all git repos inside it will be detected.')
+        click.echo()
+
         scan_dir = questionary.path(
-            'Where do you keep your repos?',
+            'Repos directory:',
             only_directories=True,
             style=STYLE,
         ).unsafe_ask()
