@@ -7,6 +7,8 @@
 
 **Your local code review assistant** — review GitHub and BitBucket pull requests from your terminal, powered by Claude Code / Gemini / Codex CLI.
 
+https://github.com/user-attachments/assets/e99705d6-5595-478e-b5de-f47d3abcfa37
+
 - Review your team's PRs using Claude, Gemini, or Codex CLI — right from your workstation
 - All local — no CI pipeline, no cloud service, no new accounts
 - Secure by default — only accesses repos you already have cloned locally

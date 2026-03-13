@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import functools
 import logging
 import os
@@ -336,10 +337,8 @@ def run_poll_loop(
 
     # Save terminal settings so we can restore after subprocesses corrupt them
     _saved_termios = None
-    try:
+    with contextlib.suppress(termios.error, ValueError, OSError):
         _saved_termios = termios.tcgetattr(sys.stdin.fileno())
-    except (termios.error, ValueError, OSError):
-        pass
 
     executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='review')
     futures: dict[Future, PRInfo] = {}
@@ -348,10 +347,8 @@ def run_poll_loop(
 
     def _restore_terminal():
         if _saved_termios is not None:
-            try:
+            with contextlib.suppress(termios.error, ValueError, OSError):
                 termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, _saved_termios)
-            except (termios.error, ValueError, OSError):
-                pass
 
     def _handle_shutdown(_signum, _frame):
         nonlocal _force_quit
