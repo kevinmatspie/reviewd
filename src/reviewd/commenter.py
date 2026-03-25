@@ -46,6 +46,39 @@ def _format_inline_comment(finding: Finding) -> str:
     return '\n\n'.join(parts)
 
 
+_MAX_TALLY_DOTS = 3
+
+
+def _format_inline_tally(inline_findings: list[Finding]) -> str:
+    """Compact emoji tally of inline findings, e.g. '🔴🔴 🟡🟡🟡+2 — posted as inline comments'."""
+    grouped: dict[Severity, int] = {}
+    for f in inline_findings:
+        grouped[f.severity] = grouped.get(f.severity, 0) + 1
+
+    parts = []
+    for severity in [Severity.CRITICAL, Severity.SUGGESTION, Severity.NITPICK]:
+        count = grouped.get(severity, 0)
+        if count == 0:
+            continue
+        emoji = SEVERITY_EMOJI[severity]
+        shown = min(count, _MAX_TALLY_DOTS)
+        part = emoji * shown
+        if count > _MAX_TALLY_DOTS:
+            part += f'+{count - _MAX_TALLY_DOTS}'
+        parts.append(part)
+
+    if not parts:
+        return ''
+    return ' '.join(parts) + ' — posted as inline comments'
+
+
+def _format_duration(seconds: float) -> str:
+    m, s = divmod(int(seconds), 60)
+    if m > 0:
+        return f'{m}m {s}s'
+    return f'{s}s'
+
+
 def _format_summary_comment(
     result: ReviewResult,
     inline_ids: set[int],
@@ -53,10 +86,18 @@ def _format_summary_comment(
     project_config: ProjectConfig,
     cli: CLI = CLI.CLAUDE,
     approved: bool = False,
+    approve_blocked_reason: str | None = None,
 ) -> str:
     cli_name = cli.value.capitalize()
     title = global_config.review_title.replace('{cli}', cli_name)
     lines = [f'## {title}', '']
+
+    # Tally of findings posted as inline comments (not shown in summary)
+    inline_findings = [f for f in result.findings if id(f) in inline_ids]
+    if inline_findings:
+        lines.append(_format_inline_tally(inline_findings))
+        lines.append('')
+
     if project_config.show_overview and result.overview:
         lines.extend([result.overview, ''])
 
@@ -91,7 +132,13 @@ def _format_summary_comment(
         lines.append(f'**Auto-approve rationale:** {result.approve_reason}')
         lines.append('')
 
-    lines.append(f'*{global_config.footer}*')
+    if approve_blocked_reason:
+        lines.append(f'**Auto-approve blocked:** AI recommended approval, but {approve_blocked_reason}.')
+        lines.append('')
+
+    duration_str = f' in {_format_duration(result.duration_seconds)}' if result.duration_seconds else ''
+    footer = global_config.footer.replace('{duration}', duration_str)
+    lines.append(f'*{footer}*')
     lines.append('*Replies to this comment are not monitored.*')
 
     return '\n'.join(lines)
@@ -116,6 +163,7 @@ def _check_auto_approve_gates(
     result: ReviewResult,
     diff_lines: int | None,
 ) -> str | None:
+    """Returns a blocking reason string, or None if auto-approve should proceed."""
     if aa.max_diff_lines is not None and diff_lines is not None and diff_lines > aa.max_diff_lines:
         return f'diff too large ({diff_lines} > {aa.max_diff_lines})'
 
@@ -135,6 +183,25 @@ def _check_auto_approve_gates(
         return 'AI did not approve'
 
     return None
+
+
+def _resolve_auto_approve(
+    aa: AutoApproveConfig,
+    result: ReviewResult,
+    diff_lines: int | None,
+) -> tuple[bool, str | None]:
+    """Returns (approved, blocked_reason_to_show).
+
+    blocked_reason_to_show is set only when the AI recommended approval
+    but a config gate prevented it and show_blocked_reason is enabled.
+    """
+    blocked = _check_auto_approve_gates(aa, result, diff_lines)
+    if not blocked:
+        return True, None
+
+    # AI wanted to approve but a gate stopped it
+    show_reason = aa.show_blocked_reason and result.approve and blocked != 'AI did not approve'
+    return False, blocked if show_reason else None
 
 
 def post_review(
@@ -171,6 +238,7 @@ def post_review(
         tests_passed=result.tests_passed,
         approve=result.approve,
         approve_reason=result.approve_reason,
+        duration_seconds=result.duration_seconds,
     )
 
     inline_severities = {s for s in project_config.inline_comments_for}
@@ -229,15 +297,22 @@ def post_review(
 
     aa = project_config.auto_approve
     approved = False
+    approve_blocked_reason = None
     if aa.enabled:
-        blocked = _check_auto_approve_gates(aa, result, diff_lines)
-        if blocked:
-            logger.info('Auto-approve blocked for PR #%d: %s', pr.pr_id, blocked)
-        else:
-            approved = True
+        approved, approve_blocked_reason = _resolve_auto_approve(aa, result, diff_lines)
+        if not approved:
+            logger.info('Auto-approve blocked for PR #%d: %s', pr.pr_id, approve_blocked_reason or 'AI did not approve')
 
     logger.info('Posting summary comment')
-    summary_body = _format_summary_comment(result, inline_ids, global_config, project_config, cli, approved=approved)
+    summary_body = _format_summary_comment(
+        result,
+        inline_ids,
+        global_config,
+        project_config,
+        cli,
+        approved=approved,
+        approve_blocked_reason=approve_blocked_reason,
+    )
     comment_id = provider.post_comment(pr.repo_slug, pr.pr_id, summary_body)
     state_db.record_comment(pr.repo_slug, pr.pr_id, comment_id)
 
@@ -269,15 +344,24 @@ def _print_dry_run(
 
     aa = project_config.auto_approve
     approved = False
+    approve_blocked_reason = None
     if aa.enabled:
-        blocked = _check_auto_approve_gates(aa, result, diff_lines)
-        if blocked:
-            print(f'\n--- Auto-Approve: BLOCKED ({blocked}) ---')
-        else:
-            approved = True
+        approved, approve_blocked_reason = _resolve_auto_approve(aa, result, diff_lines)
+        if not approved:
+            print(f'\n--- Auto-Approve: BLOCKED ({approve_blocked_reason or "AI did not approve"}) ---')
 
     print('\n--- Summary Comment ---')
-    print(_format_summary_comment(result, inline_ids, global_config, project_config, cli, approved=approved))
+    print(
+        _format_summary_comment(
+            result,
+            inline_ids,
+            global_config,
+            project_config,
+            cli,
+            approved=approved,
+            approve_blocked_reason=approve_blocked_reason,
+        )
+    )
 
     if aa.enabled and approved:
         print('\n--- Auto-Approve: WOULD APPROVE ---')

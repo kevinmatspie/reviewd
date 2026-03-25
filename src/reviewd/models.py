@@ -39,6 +39,7 @@ class ReviewResult:
     tests_passed: bool | None = None
     approve: bool = False
     approve_reason: str | None = None
+    duration_seconds: float | None = None
 
 
 @dataclass
@@ -66,6 +67,7 @@ class AutoApproveConfig:
     max_severity: str | None = None
     max_findings: int | None = None
     rules: str | None = None
+    show_blocked_reason: bool = True
 
 
 @dataclass
@@ -124,6 +126,6 @@ class GlobalConfig:
     max_concurrent_reviews: int = 4
     review_title: str = "review'd by {cli}"
     footer: str = (
-        'Automated review by [reviewd](https://github.com/simion/reviewd).'
-        ' Findings are AI-generated — use your judgment.'
+        'Automated review by [reviewd](https://github.com/simion/reviewd){duration}.'
+        ' Findings are AI-generated and may not be accurate.'
     )

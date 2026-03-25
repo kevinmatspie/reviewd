@@ -62,8 +62,6 @@ def cleanup_stale_worktrees(repo_path: str):
         lock_file = entry / '.git'
         if not lock_file.exists():
             # Not a valid worktree, just remove the directory
-            import shutil
-
             shutil.rmtree(entry, ignore_errors=True)
             logger.info('Removed orphan directory: %s', entry.name)
             continue
@@ -77,7 +75,18 @@ def cleanup_stale_worktrees(repo_path: str):
         if result.returncode == 0:
             logger.info('Cleaned up stale worktree: %s', entry.name)
         else:
-            logger.warning('Failed to clean worktree %s: %s', entry.name, result.stderr.decode().strip())
+            # Corrupted worktree (e.g. .git is a dir instead of a file after a killed review)
+            # Force-remove the directory and prune the worktree list
+            logger.warning('git worktree remove failed for %s, force-cleaning', entry.name)
+            shutil.rmtree(entry, ignore_errors=True)
+            subprocess.run(
+                ['git', 'worktree', 'prune'],
+                cwd=repo_path,
+                capture_output=True,
+                env=_GIT_ENV,
+                timeout=30,
+            )
+            logger.info('Force-cleaned worktree: %s', entry.name)
 
 
 def create_worktree(repo_path: str, pr: PRInfo) -> str:
@@ -520,6 +529,7 @@ def review_pr(
         data = extract_json(output)
         logger.debug('Parsed %d findings', len(data.get('findings', [])))
         result = parse_review_result(data)
+        result.duration_seconds = elapsed
         logger.info('Review has %d findings', len(result.findings))
         return result
     finally:

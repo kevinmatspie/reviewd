@@ -61,6 +61,7 @@ def _parse_auto_approve(data: dict) -> AutoApproveConfig:
         max_severity=data.get('max_severity'),
         max_findings=data.get('max_findings'),
         rules=data.get('rules'),
+        show_blocked_reason=data.get('show_blocked_reason', True),
     )
 
 
@@ -112,12 +113,16 @@ def _merge_auto_approve(
         parts.append(p.rules.strip())
     rules = '\n'.join(parts) if parts else None
 
+    # Project can disable showing blocked reason; if either explicitly sets False, honor it
+    show_blocked_reason = g.show_blocked_reason and p.show_blocked_reason
+
     return AutoApproveConfig(
         enabled=enabled,
         max_diff_lines=max_diff_lines,
         max_severity=max_severity,
         max_findings=max_findings,
         rules=rules,
+        show_blocked_reason=show_blocked_reason,
     )
 
 
@@ -191,11 +196,7 @@ def load_global_config(path: str | Path | None = None) -> GlobalConfig:
         poll_interval_seconds=data.get('poll_interval_seconds', 60),
         max_concurrent_reviews=data.get('max_concurrent_reviews', 4),
         review_title=data.get('review_title', "review'd by {cli}"),
-        footer=data.get(
-            'footer',
-            'Automated review by [reviewd](https://github.com/simion/reviewd). '
-            'Findings are AI-generated — use your judgment.',
-        ),
+        footer=data.get('footer', GlobalConfig.footer),
     )
 
 
