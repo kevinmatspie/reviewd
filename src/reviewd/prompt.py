@@ -25,11 +25,15 @@ Source commit: {source_commit}
 Perform a thorough code review of this pull request.
 
 1. Look for project context: check for CLAUDE.md, GEMINI.md, or AGENTS.md at the repo root. If none exist, read README.md instead. Use these to understand project conventions before reviewing.
-2. Compute the diff: run `git merge-base origin/{destination} HEAD`, then `git diff <merge-base>..HEAD`
-3. Read the changed files in full to understand surrounding context
-4. Explore related code (how changed functions are used, related models/views/utilities)
+2. Understand the PR evolution: run `git log --reverse --format='%h %s' origin/{destination}..HEAD` to see \
+every commit in order. Commit messages reveal intent — pay close attention. \
+For multi-commit PRs, skim individual commits with `git show <hash>` to see what changed at each step. \
+If something was introduced then reverted (or vice-versa), the author already tried that approach — do NOT suggest it again.
+3. Compute the full diff: run `git merge-base origin/{destination} HEAD`, then `git diff <merge-base>..HEAD`
+4. Read the changed files in full to understand surrounding context
+5. Explore related code (how changed functions are used, related models/views/utilities)
 {validation_section}\
-5. Review the changes for correctness, security, performance, architecture, and maintainability
+6. Review the changes for correctness, security, performance, architecture, and maintainability
 
 ## Severity Definitions
 {severity_section}\
@@ -73,7 +77,7 @@ def build_review_prompt(
     project_config: ProjectConfig,
     changed_files: list[str] | None = None,
 ) -> str:
-    step = 6
+    step = 7
     validation_section = ''
     if project_config.test_commands:
         commands = project_config.test_commands
