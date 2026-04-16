@@ -406,7 +406,8 @@ def invoke_cli(
         stderr_thread.start()
 
         try:
-            stdout, _ = proc.communicate(timeout=timeout)
+            stdout = proc.stdout.read() if proc.stdout else ''
+            proc.wait(timeout=timeout)
         except (subprocess.TimeoutExpired, KeyboardInterrupt, SystemExit):
             proc.terminate()
             try:
@@ -423,6 +424,8 @@ def invoke_cli(
         stderr = '\n'.join(stderr_lines)
         if proc.returncode != 0:
             logger.error('%s stderr: %s', cli.value, stderr)
+            if stdout.strip():
+                logger.error('%s stdout: %s', cli.value, stdout[:500])
             raise RuntimeError(f'{cli.value} exited with code {proc.returncode}: {stderr}')
 
         if output_file and Path(output_file).exists():
