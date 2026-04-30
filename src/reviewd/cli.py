@@ -68,12 +68,22 @@ def _setup_logging(verbose: bool):
     logging.getLogger('httpcore').setLevel(logging.WARNING)
 
 
+def _resolve_verbose(ctx, local_verbose: bool) -> bool:
+    verbose = ctx.obj['verbose'] or local_verbose
+    if verbose:
+        logging.root.setLevel(logging.DEBUG)
+    return verbose
+
+
 @click.group(invoke_without_command=True)
 @click.option('--config', 'config_path', default=None, help='Path to global config file')
+@click.option('-v', '--verbose', is_flag=True, help='Enable verbose logging')
 @click.pass_context
-def main(ctx, config_path: str | None):
+def main(ctx, config_path: str | None, verbose: bool):
     ctx.ensure_object(dict)
     ctx.obj['config_path'] = config_path
+    ctx.obj['verbose'] = verbose
+    _setup_logging(verbose)
     click.echo(f'reviewd v{VERSION}')
 
     if ctx.invoked_subcommand is None:
@@ -137,9 +147,11 @@ def _ensure_global_config(config_path: str | None) -> Path:
 
 @main.command()
 @click.option('--sample', is_flag=True, help='Write annotated sample config (non-interactive, for VPS/CI)')
+@click.option('-v', '--verbose', is_flag=True, help='Enable verbose logging')
 @click.pass_context
-def init(ctx, sample: bool):
+def init(ctx, sample: bool, verbose: bool):
     """Interactive setup wizard — configure repos, credentials, and AI CLI."""
+    _resolve_verbose(ctx, verbose)
     from reviewd.wizard import SAMPLE_CONFIG, run_wizard
 
     if sample:
@@ -166,7 +178,7 @@ def init(ctx, sample: bool):
 @click.pass_context
 def watch(ctx, verbose: bool, dry_run: bool, review_existing: bool, cli: str | None, concurrency: int | None):
     """Start the daemon — polls for new PRs and reviews them."""
-    _setup_logging(verbose)
+    verbose = _resolve_verbose(ctx, verbose)
     _check_for_updates()
     _ensure_global_config(ctx.obj['config_path'])
     config = load_global_config(ctx.obj['config_path'])
@@ -186,7 +198,7 @@ def watch(ctx, verbose: bool, dry_run: bool, review_existing: bool, cli: str | N
 @click.pass_context
 def pr(ctx, repo: str, pr_id: int, verbose: bool, dry_run: bool, force: bool, cli: str | None):
     """One-shot review of a specific PR."""
-    _setup_logging(verbose)
+    _resolve_verbose(ctx, verbose)
     _ensure_global_config(ctx.obj['config_path'])
     config = load_global_config(ctx.obj['config_path'])
     _apply_cli_override(config, cli)
@@ -194,10 +206,11 @@ def pr(ctx, repo: str, pr_id: int, verbose: bool, dry_run: bool, force: bool, cl
 
 
 @main.command(name='ls')
+@click.option('-v', '--verbose', is_flag=True, help='Enable verbose logging')
 @click.pass_context
-def ls_repos(ctx):
+def ls_repos(ctx, verbose: bool):
     """List watched repos and their open PRs."""
-    _setup_logging(False)
+    _resolve_verbose(ctx, verbose)
     _ensure_global_config(ctx.obj['config_path'])
     config = load_global_config(ctx.obj['config_path'])
     state_db = StateDB(config.state_db)
@@ -231,7 +244,7 @@ def ls_repos(ctx):
 @click.pass_context
 def status(ctx, repo: str, verbose: bool, limit: int):
     """Show review history for a repo."""
-    _setup_logging(verbose)
+    _resolve_verbose(ctx, verbose)
     _ensure_global_config(ctx.obj['config_path'])
     config = load_global_config(ctx.obj['config_path'])
     state_db = StateDB(config.state_db)
