@@ -126,7 +126,4 @@ class GlobalConfig:
     poll_interval_seconds: int = 60
     max_concurrent_reviews: int = 4
     review_title: str = "review'd by {cli}"
-    footer: str = (
-        'Automated review by [reviewd](https://github.com/simion/reviewd){duration}.'
-        ' Findings are AI-generated and may not be accurate.'
-    )
+    footer: str = 'Automated review by {model}{duration}. Findings are AI-generated and may not be accurate.'

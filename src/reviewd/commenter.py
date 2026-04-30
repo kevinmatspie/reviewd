@@ -85,11 +85,13 @@ def _format_summary_comment(
     global_config: GlobalConfig,
     project_config: ProjectConfig,
     cli: CLI = CLI.CLAUDE,
+    model: str | None = None,
     approved: bool = False,
     approve_blocked_reason: str | None = None,
 ) -> str:
     cli_name = cli.value.capitalize()
     title = global_config.review_title.replace('{cli}', cli_name)
+    model_label = model or cli_name
     lines = [f'## {title}', '']
 
     # Tally of findings posted as inline comments (not shown in summary)
@@ -137,7 +139,7 @@ def _format_summary_comment(
         lines.append('')
 
     duration_str = f' in {_format_duration(result.duration_seconds)}' if result.duration_seconds else ''
-    footer = global_config.footer.replace('{duration}', duration_str)
+    footer = global_config.footer.replace('{duration}', duration_str).replace('{model}', model_label)
     lines.append(f'*{footer}*')
     lines.append('*Replies to this comment are not monitored.*')
 
@@ -212,6 +214,7 @@ def post_review(
     project_config: ProjectConfig,
     global_config: GlobalConfig,
     cli: CLI = CLI.CLAUDE,
+    model: str | None = None,
     dry_run: bool = False,
     diff_lines: int | None = None,
 ):
@@ -263,6 +266,7 @@ def post_review(
             global_config,
             project_config,
             cli,
+            model=model,
             diff_lines=diff_lines,
         )
         return
@@ -310,6 +314,7 @@ def post_review(
         global_config,
         project_config,
         cli,
+        model=model,
         approved=approved,
         approve_blocked_reason=approve_blocked_reason,
     )
@@ -330,6 +335,7 @@ def _print_dry_run(
     global_config: GlobalConfig,
     project_config: ProjectConfig,
     cli: CLI = CLI.CLAUDE,
+    model: str | None = None,
     diff_lines: int | None = None,
 ):
     print('\n' + '=' * 60)
@@ -358,6 +364,7 @@ def _print_dry_run(
             global_config,
             project_config,
             cli,
+            model=model,
             approved=approved,
             approve_blocked_reason=approve_blocked_reason,
         )
