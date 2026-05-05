@@ -74,6 +74,15 @@
 # How often to check for new PRs in daemon mode (seconds)
 # poll_interval_seconds: 60
 
+# --- Logging ---
+
+# When set, reviewd writes its own logs to this file with built-in rotation
+# (10 MB per file, 7 archives kept). Useful for daemonized deployments where
+# launchd's StandardOutPath/StandardErrorPath would otherwise grow without
+# bound. Supports ${ENV_VAR} expansion and ~ expansion. Leave unset to log
+# only to stderr.
+# log_file: ~/Library/Logs/reviewd/reviewd.log
+
 # --- Review appearance ---
 
 # Title shown as the H2 heading of the summary comment (supports markdown)

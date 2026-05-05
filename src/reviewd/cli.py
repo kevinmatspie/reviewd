@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import logging
+import logging.handlers
 import os
 import sys
 from pathlib import Path
@@ -66,6 +67,26 @@ def _setup_logging(verbose: bool):
     logging.root.setLevel(level)
     logging.getLogger('httpx').setLevel(logging.WARNING)
     logging.getLogger('httpcore').setLevel(logging.WARNING)
+
+
+LOG_FILE_MAX_BYTES = 10 * 1024 * 1024
+LOG_FILE_BACKUP_COUNT = 7
+
+
+def _attach_file_logging(log_file: str | None):
+    if not log_file:
+        return
+    path = Path(log_file).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handler = logging.handlers.RotatingFileHandler(
+        path,
+        maxBytes=LOG_FILE_MAX_BYTES,
+        backupCount=LOG_FILE_BACKUP_COUNT,
+    )
+    handler.setFormatter(
+        logging.Formatter('%(asctime)s %(levelname)-8s %(name)s — %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+    )
+    logging.root.addHandler(handler)
 
 
 def _resolve_verbose(ctx, local_verbose: bool) -> bool:
@@ -182,6 +203,7 @@ def watch(ctx, verbose: bool, dry_run: bool, review_existing: bool, cli: str | N
     _check_for_updates()
     _ensure_global_config(ctx.obj['config_path'])
     config = load_global_config(ctx.obj['config_path'])
+    _attach_file_logging(config.log_file)
     _apply_cli_override(config, cli)
     if concurrency is not None:
         config.max_concurrent_reviews = concurrency

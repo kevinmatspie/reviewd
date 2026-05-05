@@ -178,6 +178,10 @@ def load_global_config(path: str | Path | None = None) -> GlobalConfig:
     state_db = data.get('state_db', f'{default_data_home}/reviewd/state.db')
     state_db = str(Path(_resolve_env_vars(state_db)).expanduser())
 
+    log_file = data.get('log_file')
+    if log_file is not None:
+        log_file = str(Path(_resolve_env_vars(str(log_file))).expanduser())
+
     global_aa = _parse_auto_approve(data['auto_approve']) if 'auto_approve' in data else None
 
     return GlobalConfig(
@@ -198,6 +202,7 @@ def load_global_config(path: str | Path | None = None) -> GlobalConfig:
         max_concurrent_reviews=data.get('max_concurrent_reviews', 4),
         review_title=data.get('review_title', "review'd by {cli}"),
         footer=data.get('footer', GlobalConfig.footer),
+        log_file=log_file,
     )
 
 

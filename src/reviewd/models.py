@@ -127,3 +127,4 @@ class GlobalConfig:
     max_concurrent_reviews: int = 4
     review_title: str = "review'd by {cli}"
     footer: str = 'Automated review by {model}{duration}. Findings are AI-generated and may not be accurate.'
+    log_file: str | None = None
