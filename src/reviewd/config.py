@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import subprocess
+import threading
 from pathlib import Path
 
 import yaml
@@ -322,14 +323,34 @@ def resolve_github_config(global_config: GlobalConfig, repo_config: RepoConfig) 
     raise ValueError(f'No github config found for repo "{repo_config.name}"')
 
 
+# Providers wrap a long-lived httpx.Client. Recreating them per call leaks
+# pooled keepalive sockets in long-running daemons (FD exhaustion under
+# launchd's default 256-FD soft limit). Cache by credential identity so each
+# workspace/token reuses one client for the process lifetime.
+_provider_cache: dict[tuple, GitProvider] = {}
+_provider_cache_lock = threading.Lock()
+
+
 def get_provider(global_config: GlobalConfig, repo_config: RepoConfig) -> GitProvider:
     if repo_config.provider == 'github':
         from reviewd.providers.github import GithubProvider
 
         config = resolve_github_config(global_config, repo_config)
-        return GithubProvider(config)
+        key = ('github', config.token)
+        with _provider_cache_lock:
+            cached = _provider_cache.get(key)
+            if cached is None:
+                cached = GithubProvider(config)
+                _provider_cache[key] = cached
+        return cached
 
     from reviewd.providers.bitbucket import BitbucketProvider
 
     workspace, token = resolve_bitbucket_config(global_config, repo_config)
-    return BitbucketProvider(workspace, token)
+    key = ('bitbucket', workspace, token)
+    with _provider_cache_lock:
+        cached = _provider_cache.get(key)
+        if cached is None:
+            cached = BitbucketProvider(workspace, token)
+            _provider_cache[key] = cached
+    return cached
