@@ -88,16 +88,26 @@ def _attach_file_logging(log_file: str | None):
     )
     logging.root.addHandler(handler)
 
-    # When running non-interactively (e.g. under launchd), the stderr stream
-    # is captured to a file the supervisor opened once and never reopens.
-    # Our RotatingFileHandler renames on rotation, but the supervisor's FD
-    # stays bound to the old inode — every rotation strands stderr on the
-    # rotated file, producing multi-GB orphans. Raise stderr to WARNING so
-    # the supervisor's capture only catches startup crashes and real errors.
-    if not sys.stderr.isatty():
+    # If a supervisor (e.g. launchd) has redirected stderr to the same file
+    # the RotatingFileHandler writes to, every rotation strands the
+    # supervisor's FD on the old inode — producing multi-GB orphans. When
+    # we detect that exact collision (stderr and log_file share an inode),
+    # raise stderr to WARNING so only startup crashes and real errors hit
+    # the stranded path. Non-file stderr (journald, docker, pipes, TTY) is
+    # left alone.
+    if _stderr_shares_inode_with(path):
         for h in logging.root.handlers:
             if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
                 h.setLevel(logging.WARNING)
+
+
+def _stderr_shares_inode_with(log_path: Path) -> bool:
+    try:
+        stderr_stat = os.fstat(sys.stderr.fileno())
+        file_stat = log_path.stat()
+    except OSError:
+        return False
+    return stderr_stat.st_dev == file_stat.st_dev and stderr_stat.st_ino == file_stat.st_ino
 
 
 def _resolve_verbose(ctx, local_verbose: bool) -> bool:
