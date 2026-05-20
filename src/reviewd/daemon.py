@@ -116,6 +116,10 @@ def _build_review_status() -> str:
 
 
 def _status(msg: str, *, clear: bool = True):
+    # In-place status updates only make sense on a TTY. Captured to a file or
+    # pipe, the CLEAR_LINE escapes accumulate into an unbounded single line.
+    if not sys.stderr.isatty():
+        return
     review_status = _build_review_status()
     if review_status:
         line = f'{CLEAR_LINE}{msg} {DIM}|{RESET} {review_status}'

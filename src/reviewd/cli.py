@@ -88,26 +88,28 @@ def _attach_file_logging(log_file: str | None):
     )
     logging.root.addHandler(handler)
 
-    # If a supervisor (e.g. launchd) has redirected stderr to the same file
-    # the RotatingFileHandler writes to, every rotation strands the
-    # supervisor's FD on the old inode — producing multi-GB orphans. When
-    # we detect that exact collision (stderr and log_file share an inode),
-    # raise stderr to WARNING so only startup crashes and real errors hit
-    # the stranded path. Non-file stderr (journald, docker, pipes, TTY) is
-    # left alone.
-    if _stderr_shares_inode_with(path):
+    # When stderr is captured to a regular file (e.g. launchd
+    # StandardErrorPath, or a shell `2>file` redirect), every INFO line
+    # gets double-written — once via RotatingFileHandler to log_file, and
+    # once via stderr → captured file — and the captured file isn't rotated
+    # by us. Raise stderr to WARNING in that case so the captured file
+    # only catches startup crashes and real errors. Non-file stderr
+    # (journald socket, docker pipe, bare pipe, TTY) is left alone so
+    # those deployments keep full observability.
+    if _stderr_is_regular_file():
         for h in logging.root.handlers:
             if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
                 h.setLevel(logging.WARNING)
 
 
-def _stderr_shares_inode_with(log_path: Path) -> bool:
+def _stderr_is_regular_file() -> bool:
+    import stat
+
     try:
-        stderr_stat = os.fstat(sys.stderr.fileno())
-        file_stat = log_path.stat()
+        mode = os.fstat(sys.stderr.fileno()).st_mode
     except OSError:
         return False
-    return stderr_stat.st_dev == file_stat.st_dev and stderr_stat.st_ino == file_stat.st_ino
+    return stat.S_ISREG(mode)
 
 
 def _resolve_verbose(ctx, local_verbose: bool) -> bool:
