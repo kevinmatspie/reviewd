@@ -4,14 +4,18 @@ import logging
 
 import httpx
 
+from reviewd.config import effective_formal_review
 from reviewd.models import (
     CLI,
     SEVERITY_ORDER,
     AutoApproveConfig,
     Finding,
     GlobalConfig,
+    InlineComment,
     PRInfo,
     ProjectConfig,
+    RepoConfig,
+    ReviewEvent,
     ReviewResult,
     Severity,
 )
@@ -208,6 +212,51 @@ def _resolve_auto_approve(
     return False, blocked if show_reason else None
 
 
+def _select_review_event(
+    result: ReviewResult,
+    project_config: ProjectConfig,
+    diff_lines: int | None,
+) -> tuple[ReviewEvent, bool, str | None]:
+    """Returns (event, approved, approve_blocked_reason). Order: APPROVE > REQUEST_CHANGES > COMMENT."""
+    aa = project_config.auto_approve
+    approved = False
+    approve_blocked_reason = None
+    if aa.enabled:
+        approved, approve_blocked_reason = _resolve_auto_approve(aa, result, diff_lines)
+
+    if approved:
+        return ReviewEvent.APPROVE, True, None
+
+    has_critical = any(f.severity == Severity.CRITICAL for f in result.findings)
+    if has_critical:
+        return ReviewEvent.REQUEST_CHANGES, False, approve_blocked_reason
+
+    return ReviewEvent.COMMENT, False, approve_blocked_reason
+
+
+def _dismiss_prior_reviews(provider: GitProvider, state_db: StateDB, pr: PRInfo):
+    prior_ids = state_db.get_review_ids(pr.repo_slug, pr.pr_id)
+    if not prior_ids:
+        return
+    logger.info('Processing %d prior reviews on PR #%d', len(prior_ids), pr.pr_id)
+    for review_id in prior_ids:
+        try:
+            state = provider.get_review_state(pr.repo_slug, pr.pr_id, review_id)
+        except httpx.HTTPError as e:
+            logger.warning('Could not fetch prior review %d state: %s — removing from state', review_id, e)
+            state_db.delete_review(pr.repo_slug, pr.pr_id, review_id)
+            continue
+
+        if state == 'CHANGES_REQUESTED':
+            provider.dismiss_review(
+                pr.repo_slug,
+                pr.pr_id,
+                review_id,
+                'Superseded by newer reviewd review',
+            )
+        state_db.delete_review(pr.repo_slug, pr.pr_id, review_id)
+
+
 def _filter_inline_findings_by_diff(
     inline_findings: list[Finding],
     provider: GitProvider,
@@ -237,6 +286,7 @@ def post_review(
     state_db: StateDB,
     pr: PRInfo,
     result: ReviewResult,
+    repo_config: RepoConfig,
     project_config: ProjectConfig,
     global_config: GlobalConfig,
     cli: CLI = CLI.CLAUDE,
@@ -299,19 +349,96 @@ def post_review(
         )
         return
 
-    _post_comment_review(
-        provider,
-        state_db,
-        pr,
-        result,
-        inline_findings,
-        inline_ids,
-        project_config,
-        global_config,
-        cli,
-        model,
-        diff_lines,
+    use_formal = (
+        provider.supports_formal_review
+        and effective_formal_review(global_config, repo_config)
     )
+    if use_formal:
+        _post_formal_review(
+            provider,
+            state_db,
+            pr,
+            result,
+            inline_findings,
+            inline_ids,
+            project_config,
+            global_config,
+            cli,
+            model,
+            diff_lines,
+        )
+    else:
+        _post_comment_review(
+            provider,
+            state_db,
+            pr,
+            result,
+            inline_findings,
+            inline_ids,
+            project_config,
+            global_config,
+            cli,
+            model,
+            diff_lines,
+        )
+
+
+def _post_formal_review(
+    provider: GitProvider,
+    state_db: StateDB,
+    pr: PRInfo,
+    result: ReviewResult,
+    inline_findings: list[Finding],
+    inline_ids: set[int],
+    project_config: ProjectConfig,
+    global_config: GlobalConfig,
+    cli: CLI,
+    model: str | None,
+    diff_lines: int | None,
+):
+    event, approved, approve_blocked_reason = _select_review_event(result, project_config, diff_lines)
+    logger.info('Posting formal review on PR #%d: event=%s', pr.pr_id, event.value)
+
+    _dismiss_prior_reviews(provider, state_db, pr)
+
+    old_comment_ids = state_db.get_comment_ids(pr.repo_slug, pr.pr_id)
+    if old_comment_ids:
+        logger.info('Deleting %d old inline comments on PR #%d', len(old_comment_ids), pr.pr_id)
+        deleted = 0
+        for cid in old_comment_ids:
+            if provider.delete_comment(pr.repo_slug, pr.pr_id, cid):
+                deleted += 1
+        state_db.delete_comments(pr.repo_slug, pr.pr_id)
+        logger.info('Deleted %d/%d old inline comments', deleted, len(old_comment_ids))
+
+    body = _format_summary_comment(
+        result,
+        inline_ids,
+        global_config,
+        project_config,
+        cli,
+        model=model,
+        approved=approved,
+        approve_blocked_reason=approve_blocked_reason,
+    )
+
+    inline_payload = [
+        InlineComment(path=f.file, line=f.line, body=_format_inline_comment(f))
+        for f in inline_findings
+    ]
+
+    review_id = provider.submit_review(
+        pr.repo_slug,
+        pr.pr_id,
+        body=body,
+        event=event,
+        inline_comments=inline_payload,
+        source_commit=pr.source_commit,
+    )
+    if review_id is not None:
+        state_db.record_review(pr.repo_slug, pr.pr_id, review_id)
+    else:
+        logger.warning('Formal review on PR #%d returned no ID (likely self-PR 422)', pr.pr_id)
 
 
 def _post_comment_review(

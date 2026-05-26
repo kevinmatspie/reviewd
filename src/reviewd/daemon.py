@@ -226,6 +226,7 @@ def _process_pr(
             state_db,
             pr,
             result,
+            repo_config,
             project_config,
             global_config,
             cli=repo_config.cli,
