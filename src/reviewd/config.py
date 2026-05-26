@@ -172,6 +172,7 @@ def load_global_config(path: str | Path | None = None) -> GlobalConfig:
                 github=repo_gh,
                 cli=repo_cli,
                 model=repo_data.get('model', data.get('model')),
+                formal_review=repo_data.get('formal_review'),  # None = inherit from global
             )
         )
 
@@ -196,6 +197,7 @@ def load_global_config(path: str | Path | None = None) -> GlobalConfig:
         cli_defaults={CLI(k): v for k, v in data.get('cli_defaults', {}).items()},
         instructions=data.get('instructions'),
         auto_approve=global_aa,
+        formal_review=data.get('formal_review', False),
         inline_comments_for=data.get('inline_comments_for'),
         skip_title_patterns=data.get('skip_title_patterns', ['[no-review]', '[wip]', '[no-claudiu]']),
         skip_authors=data.get('skip_authors', []),
@@ -321,6 +323,10 @@ def resolve_github_config(global_config: GlobalConfig, repo_config: RepoConfig) 
     if global_config.github is not None:
         return global_config.github
     raise ValueError(f'No github config found for repo "{repo_config.name}"')
+
+
+def effective_formal_review(global_config: GlobalConfig, repo: RepoConfig) -> bool:
+    return repo.formal_review if repo.formal_review is not None else global_config.formal_review
 
 
 # Providers wrap a long-lived httpx.Client. Recreating them per call leaks
