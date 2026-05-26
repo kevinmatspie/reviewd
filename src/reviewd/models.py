@@ -11,6 +11,12 @@ class Severity(enum.StrEnum):
     GOOD = 'good'
 
 
+class ReviewEvent(enum.StrEnum):
+    COMMENT = 'COMMENT'
+    REQUEST_CHANGES = 'REQUEST_CHANGES'
+    APPROVE = 'APPROVE'
+
+
 SEVERITY_ORDER = {
     'good': 0,
     'nitpick': 1,
@@ -29,6 +35,13 @@ class Finding:
     end_line: int | None
     issue: str
     fix: str | None = None
+
+
+@dataclass
+class InlineComment:
+    path: str
+    line: int
+    body: str
 
 
 @dataclass
@@ -102,6 +115,7 @@ class RepoConfig:
     github: GithubConfig | None = None
     cli: CLI = CLI.CLAUDE
     model: str | None = None
+    formal_review: bool | None = None
 
     @property
     def slug(self) -> str:
@@ -120,6 +134,7 @@ class GlobalConfig:
     cli_defaults: dict[CLI, list[str]] = field(default_factory=dict)
     instructions: str | None = None
     auto_approve: AutoApproveConfig | None = None
+    formal_review: bool = False
     inline_comments_for: list[str] | None = None
     skip_title_patterns: list[str] = field(default_factory=lambda: ['[no-review]', '[wip]', '[no-claudiu]'])
     skip_authors: list[str] = field(default_factory=list)
