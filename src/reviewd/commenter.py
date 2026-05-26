@@ -336,6 +336,11 @@ def post_review(
 
     inline_ids = {id(f) for f in inline_findings}
 
+    use_formal = (
+        provider.supports_formal_review
+        and effective_formal_review(global_config, repo_config)
+    )
+
     if dry_run:
         _print_dry_run(
             result,
@@ -346,13 +351,9 @@ def post_review(
             cli,
             model=model,
             diff_lines=diff_lines,
+            use_formal=use_formal,
         )
         return
-
-    use_formal = (
-        provider.supports_formal_review
-        and effective_formal_review(global_config, repo_config)
-    )
     if use_formal:
         _post_formal_review(
             provider,
@@ -520,7 +521,12 @@ def _print_dry_run(
     cli: CLI = CLI.CLAUDE,
     model: str | None = None,
     diff_lines: int | None = None,
+    use_formal: bool = False,
 ):
+    if use_formal:
+        _print_dry_run_formal(result, inline_findings, inline_ids, global_config, project_config, cli, model, diff_lines)
+        return
+
     print('\n' + '=' * 60)
     print('DRY RUN — would post the following comments:')
     print('=' * 60)
@@ -556,4 +562,42 @@ def _print_dry_run(
     if aa.enabled and approved:
         print('\n--- Auto-Approve: WOULD APPROVE ---')
 
+    print('=' * 60 + '\n')
+
+
+def _print_dry_run_formal(
+    result: ReviewResult,
+    inline_findings: list[Finding],
+    inline_ids: set[int],
+    global_config: GlobalConfig,
+    project_config: ProjectConfig,
+    cli: CLI,
+    model: str | None,
+    diff_lines: int | None,
+):
+    event, approved, approve_blocked_reason = _select_review_event(result, project_config, diff_lines)
+
+    print('\n' + '=' * 60)
+    print(f'DRY RUN — would submit a formal review: event={event.value}')
+    print('=' * 60)
+
+    if inline_findings:
+        print(f'\n--- Inline Comments ({len(inline_findings)}) ---')
+        for f in inline_findings:
+            print(f'\n  File: {f.file}:{f.line}')
+            print(f'  {_format_inline_comment(f)}')
+
+    print('\n--- Review Body ---')
+    print(
+        _format_summary_comment(
+            result,
+            inline_ids,
+            global_config,
+            project_config,
+            cli,
+            model=model,
+            approved=approved,
+            approve_blocked_reason=approve_blocked_reason,
+        )
+    )
     print('=' * 60 + '\n')
