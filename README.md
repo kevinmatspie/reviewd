@@ -248,6 +248,13 @@ else becomes `COMMENT`. Default is off — existing comment-based behavior is pr
 For `REQUEST_CHANGES` to actually block merge, configure branch protection on the
 target branch to require approving reviews.
 
+**Note on APPROVE:** `formal_review: true` alone makes findings count via
+`REQUEST_CHANGES`, but clean PRs become `COMMENT` reviews — which don't satisfy
+branch-protection approval requirements. To get an `APPROVE` event on clean PRs,
+also set `auto_approve.enabled: true` (with optional gates like `max_diff_lines`).
+The two flags are intentionally orthogonal: `formal_review` controls whether
+reviews are formal; `auto_approve` controls whether reviewd is allowed to approve.
+
 ## CLI Reference
 
 ```bash
