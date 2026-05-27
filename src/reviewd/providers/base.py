@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from reviewd.models import PRInfo
+from reviewd.models import InlineComment, PRInfo, ReviewEvent
 
 
 class GitProvider(ABC):
+    supports_formal_review: bool = False
+
     @abstractmethod
     def list_open_prs(self, repo_slug: str) -> list[PRInfo]: ...
 
@@ -30,3 +32,29 @@ class GitProvider(ABC):
 
     @abstractmethod
     def approve_pr(self, repo_slug: str, pr_id: int) -> bool: ...
+
+    @abstractmethod
+    def submit_review(
+        self,
+        repo_slug: str,
+        pr_id: int,
+        body: str,
+        event: ReviewEvent,
+        inline_comments: list[InlineComment],
+        source_commit: str,
+    ) -> int | None: ...
+
+    @abstractmethod
+    def dismiss_review(
+        self,
+        repo_slug: str,
+        pr_id: int,
+        review_id: int,
+        message: str,
+    ) -> bool: ...
+
+    @abstractmethod
+    def get_review_state(self, repo_slug: str, pr_id: int, review_id: int) -> str: ...
+
+    @abstractmethod
+    def get_diff_lines(self, repo_slug: str, pr_id: int) -> dict[str, set[int]]: ...

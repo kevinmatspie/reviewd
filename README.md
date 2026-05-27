@@ -238,6 +238,16 @@ All gates must pass — if any one blocks, the PR is not approved. The `rules` f
 
 `auto_approve` can also be set in the global config and will be inherited by all repos. Per-project settings override global ones.
 
+### Formal PR reviews (GitHub)
+
+Set `formal_review: true` globally or per-repo to have reviewd submit findings as a
+single formal GitHub PR Review. Critical findings become `REQUEST_CHANGES` (blocks
+merge under branch protection); auto-approved reviews become `APPROVE`; everything
+else becomes `COMMENT`. Default is off — existing comment-based behavior is preserved.
+
+For `REQUEST_CHANGES` to actually block merge, configure branch protection on the
+target branch to require approving reviews.
+
 ## CLI Reference
 
 ```bash

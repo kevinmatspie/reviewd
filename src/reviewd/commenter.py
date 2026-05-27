@@ -2,14 +2,20 @@ from __future__ import annotations
 
 import logging
 
+import httpx
+
+from reviewd.config import effective_formal_review
 from reviewd.models import (
     CLI,
     SEVERITY_ORDER,
     AutoApproveConfig,
     Finding,
     GlobalConfig,
+    InlineComment,
     PRInfo,
     ProjectConfig,
+    RepoConfig,
+    ReviewEvent,
     ReviewResult,
     Severity,
 )
@@ -206,11 +212,84 @@ def _resolve_auto_approve(
     return False, blocked if show_reason else None
 
 
+def _select_review_event(
+    result: ReviewResult,
+    project_config: ProjectConfig,
+    diff_lines: int | None,
+) -> tuple[ReviewEvent, bool, str | None]:
+    """Returns (event, approved, approve_blocked_reason). Order: APPROVE > REQUEST_CHANGES > COMMENT."""
+    aa = project_config.auto_approve
+    approved = False
+    approve_blocked_reason = None
+    if aa.enabled:
+        approved, approve_blocked_reason = _resolve_auto_approve(aa, result, diff_lines)
+
+    if approved:
+        return ReviewEvent.APPROVE, True, None
+
+    has_critical = any(f.severity == Severity.CRITICAL for f in result.findings)
+    if has_critical:
+        return ReviewEvent.REQUEST_CHANGES, False, approve_blocked_reason
+
+    return ReviewEvent.COMMENT, False, approve_blocked_reason
+
+
+def _dismiss_prior_reviews(provider: GitProvider, state_db: StateDB, pr: PRInfo):
+    prior_ids = state_db.get_review_ids(pr.repo_slug, pr.pr_id)
+    if not prior_ids:
+        return
+    logger.info('Processing %d prior reviews on PR #%d', len(prior_ids), pr.pr_id)
+    for review_id in prior_ids:
+        try:
+            state = provider.get_review_state(pr.repo_slug, pr.pr_id, review_id)
+        except httpx.HTTPError as e:
+            logger.warning('Could not fetch prior review %d state: %s — removing from state', review_id, e)
+            state_db.delete_review(pr.repo_slug, pr.pr_id, review_id)
+            continue
+
+        if state == 'CHANGES_REQUESTED':
+            if provider.dismiss_review(
+                pr.repo_slug,
+                pr.pr_id,
+                review_id,
+                'Superseded by newer reviewd review',
+            ):
+                state_db.delete_review(pr.repo_slug, pr.pr_id, review_id)
+            # else: leave in state DB so next pass retries the dismissal
+        else:
+            state_db.delete_review(pr.repo_slug, pr.pr_id, review_id)
+
+
+def _filter_inline_findings_by_diff(
+    inline_findings: list[Finding],
+    provider: GitProvider,
+    pr: PRInfo,
+) -> list[Finding]:
+    if not inline_findings:
+        return inline_findings
+    try:
+        diff_lines = provider.get_diff_lines(pr.repo_slug, pr.pr_id)
+    except NotImplementedError:
+        return inline_findings
+    except httpx.HTTPError as e:
+        logger.warning('Could not fetch diff lines for pre-filter: %s — skipping filter', e)
+        return inline_findings
+
+    kept = []
+    for f in inline_findings:
+        if f.file in diff_lines and f.line in diff_lines[f.file]:
+            kept.append(f)
+        else:
+            logger.info('Dropping hallucinated inline finding %s:%s (not in diff)', f.file, f.line)
+    return kept
+
+
 def post_review(
     provider: GitProvider,
     state_db: StateDB,
     pr: PRInfo,
     result: ReviewResult,
+    repo_config: RepoConfig,
     project_config: ProjectConfig,
     global_config: GlobalConfig,
     cli: CLI = CLI.CLAUDE,
@@ -247,6 +326,8 @@ def post_review(
     inline_severities = {s for s in project_config.inline_comments_for}
     inline_findings = [f for f in result.findings if f.severity.value in inline_severities and f.file and f.line]
 
+    inline_findings = _filter_inline_findings_by_diff(inline_findings, provider, pr)
+
     max_inline = project_config.max_inline_comments
     if max_inline is not None and len(inline_findings) > max_inline:
         logger.info(
@@ -258,6 +339,16 @@ def post_review(
 
     inline_ids = {id(f) for f in inline_findings}
 
+    use_formal = (
+        provider.supports_formal_review
+        and effective_formal_review(global_config, repo_config)
+    )
+    if effective_formal_review(global_config, repo_config) and not provider.supports_formal_review:
+        logger.warning(
+            'formal_review enabled but provider %s does not support it — falling back to comment-based review',
+            type(provider).__name__,
+        )
+
     if dry_run:
         _print_dry_run(
             result,
@@ -268,9 +359,111 @@ def post_review(
             cli,
             model=model,
             diff_lines=diff_lines,
+            use_formal=use_formal,
         )
         return
 
+    if use_formal:
+        _post_formal_review(
+            provider,
+            state_db,
+            pr,
+            result,
+            inline_findings,
+            inline_ids,
+            project_config,
+            global_config,
+            cli,
+            model,
+            diff_lines,
+        )
+    else:
+        _post_comment_review(
+            provider,
+            state_db,
+            pr,
+            result,
+            inline_findings,
+            inline_ids,
+            project_config,
+            global_config,
+            cli,
+            model,
+            diff_lines,
+        )
+
+
+def _post_formal_review(
+    provider: GitProvider,
+    state_db: StateDB,
+    pr: PRInfo,
+    result: ReviewResult,
+    inline_findings: list[Finding],
+    inline_ids: set[int],
+    project_config: ProjectConfig,
+    global_config: GlobalConfig,
+    cli: CLI,
+    model: str | None,
+    diff_lines: int | None,
+):
+    event, approved, approve_blocked_reason = _select_review_event(result, project_config, diff_lines)
+    logger.info('Posting formal review on PR #%d: event=%s', pr.pr_id, event.value)
+
+    _dismiss_prior_reviews(provider, state_db, pr)
+
+    old_comment_ids = state_db.get_comment_ids(pr.repo_slug, pr.pr_id)
+    if old_comment_ids:
+        logger.info('Deleting %d old inline comments on PR #%d', len(old_comment_ids), pr.pr_id)
+        deleted = 0
+        for cid in old_comment_ids:
+            if provider.delete_comment(pr.repo_slug, pr.pr_id, cid):
+                deleted += 1
+        state_db.delete_comments(pr.repo_slug, pr.pr_id)
+        logger.info('Deleted %d/%d old inline comments', deleted, len(old_comment_ids))
+
+    body = _format_summary_comment(
+        result,
+        inline_ids,
+        global_config,
+        project_config,
+        cli,
+        model=model,
+        approved=approved,
+        approve_blocked_reason=approve_blocked_reason,
+    )
+
+    inline_payload = [
+        InlineComment(path=f.file, line=f.line, body=_format_inline_comment(f))
+        for f in inline_findings
+    ]
+
+    review_id = provider.submit_review(
+        pr.repo_slug,
+        pr.pr_id,
+        body=body,
+        event=event,
+        inline_comments=inline_payload,
+        source_commit=pr.source_commit,
+    )
+    if review_id is not None:
+        state_db.record_review(pr.repo_slug, pr.pr_id, review_id)
+    else:
+        logger.warning('Formal review on PR #%d returned no ID (likely self-PR 422)', pr.pr_id)
+
+
+def _post_comment_review(
+    provider: GitProvider,
+    state_db: StateDB,
+    pr: PRInfo,
+    result: ReviewResult,
+    inline_findings: list[Finding],
+    inline_ids: set[int],
+    project_config: ProjectConfig,
+    global_config: GlobalConfig,
+    cli: CLI,
+    model: str | None,
+    diff_lines: int | None,
+):
     logger.info('Posting review: %d inline + summary comment', len(inline_findings))
 
     old_comment_ids = state_db.get_comment_ids(pr.repo_slug, pr.pr_id)
@@ -337,7 +530,12 @@ def _print_dry_run(
     cli: CLI = CLI.CLAUDE,
     model: str | None = None,
     diff_lines: int | None = None,
+    use_formal: bool = False,
 ):
+    if use_formal:
+        _print_dry_run_formal(result, inline_findings, inline_ids, global_config, project_config, cli, model, diff_lines)
+        return
+
     print('\n' + '=' * 60)
     print('DRY RUN — would post the following comments:')
     print('=' * 60)
@@ -373,4 +571,42 @@ def _print_dry_run(
     if aa.enabled and approved:
         print('\n--- Auto-Approve: WOULD APPROVE ---')
 
+    print('=' * 60 + '\n')
+
+
+def _print_dry_run_formal(
+    result: ReviewResult,
+    inline_findings: list[Finding],
+    inline_ids: set[int],
+    global_config: GlobalConfig,
+    project_config: ProjectConfig,
+    cli: CLI,
+    model: str | None,
+    diff_lines: int | None,
+):
+    event, approved, approve_blocked_reason = _select_review_event(result, project_config, diff_lines)
+
+    print('\n' + '=' * 60)
+    print(f'DRY RUN — would submit a formal review: event={event.value}')
+    print('=' * 60)
+
+    if inline_findings:
+        print(f'\n--- Inline Comments ({len(inline_findings)}) ---')
+        for f in inline_findings:
+            print(f'\n  File: {f.file}:{f.line}')
+            print(f'  {_format_inline_comment(f)}')
+
+    print('\n--- Review Body ---')
+    print(
+        _format_summary_comment(
+            result,
+            inline_ids,
+            global_config,
+            project_config,
+            cli,
+            model=model,
+            approved=approved,
+            approve_blocked_reason=approve_blocked_reason,
+        )
+    )
     print('=' * 60 + '\n')

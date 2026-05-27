@@ -5,7 +5,7 @@ import time
 
 import httpx
 
-from reviewd.models import GithubConfig, PRInfo
+from reviewd.models import GithubConfig, InlineComment, PRInfo, ReviewEvent
 from reviewd.providers.base import GitProvider
 
 logger = logging.getLogger(__name__)
@@ -15,6 +15,8 @@ GH_API_BASE = 'https://api.github.com'
 
 
 class GithubProvider(GitProvider):
+    supports_formal_review = True
+
     def __init__(self, config: GithubConfig):
         self.client = httpx.Client(
             base_url=GH_API_BASE,
@@ -150,6 +152,59 @@ class GithubProvider(GitProvider):
         logger.info('Approved PR #%d', pr_id)
         return True
 
+    def submit_review(
+        self,
+        repo_slug: str,
+        pr_id: int,
+        body: str,
+        event: ReviewEvent,
+        inline_comments: list[InlineComment],
+        source_commit: str,
+    ) -> int | None:
+        url = f'/repos/{repo_slug}/pulls/{pr_id}/reviews'
+        payload: dict = {
+            'commit_id': source_commit,
+            'event': event.value,
+            'body': body,
+        }
+        if inline_comments:
+            payload['comments'] = [
+                {'path': c.path, 'line': c.line, 'side': 'RIGHT', 'body': f'{c.body}\n\n{BOT_MARKER}'}
+                for c in inline_comments
+            ]
+        resp = self._request_raw('POST', url, json=payload)
+        if resp.status_code == 422:
+            logger.warning('Cannot submit %s review on PR #%d: %s', event.value, pr_id, resp.text[:200])
+            return None
+        resp.raise_for_status()
+        review_id = resp.json()['id']
+        logger.info('Submitted %s review %d on PR #%d (%d inline)', event.value, review_id, pr_id, len(inline_comments))
+        return review_id
+
+    def dismiss_review(self, repo_slug: str, pr_id: int, review_id: int, message: str) -> bool:
+        url = f'/repos/{repo_slug}/pulls/{pr_id}/reviews/{review_id}/dismissals'
+        resp = self._request_raw('PUT', url, json={'message': message})
+        if resp.status_code != 200:
+            logger.warning('Failed to dismiss review %d on PR #%d: %d %s', review_id, pr_id, resp.status_code, resp.text[:200])
+            return False
+        logger.info('Dismissed review %d on PR #%d', review_id, pr_id)
+        return True
+
+    def get_review_state(self, repo_slug: str, pr_id: int, review_id: int) -> str:
+        url = f'/repos/{repo_slug}/pulls/{pr_id}/reviews/{review_id}'
+        resp = self._request('GET', url)
+        return resp.json()['state']
+
+    def get_diff_lines(self, repo_slug: str, pr_id: int) -> dict[str, set[int]]:
+        files = self._paginate(f'/repos/{repo_slug}/pulls/{pr_id}/files', {'per_page': '100'})
+        result: dict[str, set[int]] = {}
+        for f in files:
+            patch = f.get('patch')
+            if not patch:
+                continue
+            result[f['filename']] = _parse_added_lines(patch)
+        return result
+
 
 def _parse_next_link(link_header: str) -> str | None:
     for part in link_header.split(','):
@@ -157,3 +212,25 @@ def _parse_next_link(link_header: str) -> str | None:
             url = part.split(';')[0].strip().strip('<>')
             return url
     return None
+
+
+def _parse_added_lines(patch: str) -> set[int]:
+    lines: set[int] = set()
+    new_line = 0
+    for raw in patch.split('\n'):
+        if raw.startswith('@@'):
+            try:
+                new_part = raw.split('+', 1)[1].split(' ', 1)[0]
+                new_line = int(new_part.split(',', 1)[0])
+            except (IndexError, ValueError):
+                logger.warning('Could not parse hunk header: %s', raw[:80])
+                continue
+            continue
+        if raw.startswith('+') and not raw.startswith('+++'):
+            lines.add(new_line)
+            new_line += 1
+        elif raw.startswith('-') and not raw.startswith('---'):
+            pass  # deletion: don't advance new-file line counter
+        else:
+            new_line += 1
+    return lines

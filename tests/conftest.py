@@ -42,6 +42,18 @@ class FakeProvider(GitProvider):
     def approve_pr(self, repo_slug, pr_id):
         self.approved.append((repo_slug, pr_id))
 
+    def submit_review(self, repo_slug, pr_id, body, event, inline_comments, source_commit):
+        return None
+
+    def dismiss_review(self, repo_slug, pr_id, review_id, message):
+        return True
+
+    def get_review_state(self, repo_slug, pr_id, review_id):
+        raise NotImplementedError
+
+    def get_diff_lines(self, repo_slug, pr_id):
+        raise NotImplementedError
+
 
 @pytest.fixture()
 def pr():
@@ -64,6 +76,11 @@ def global_config():
         review_title='Test Review',
         footer='Test footer.',
     )
+
+
+@pytest.fixture()
+def repo_config():
+    return RepoConfig(name='test', path='/tmp')
 
 
 @pytest.fixture()

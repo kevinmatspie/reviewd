@@ -41,8 +41,18 @@ class StateDB:
             CREATE INDEX IF NOT EXISTS idx_reviews_repo_pr
                 ON reviews (repo_slug, pr_id);
 
+            CREATE TABLE IF NOT EXISTS posted_reviews (
+                repo_slug TEXT NOT NULL,
+                pr_id INTEGER NOT NULL,
+                review_id INTEGER NOT NULL,
+                PRIMARY KEY (repo_slug, pr_id, review_id)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_posted_comments_repo_pr
                 ON posted_comments (repo_slug, pr_id);
+
+            CREATE INDEX IF NOT EXISTS idx_posted_reviews_repo_pr
+                ON posted_reviews (repo_slug, pr_id);
         """
         )
 
@@ -92,6 +102,38 @@ class StateDB:
         with self._lock:
             self.conn.execute(
                 'DELETE FROM posted_comments WHERE repo_slug = ? AND pr_id = ?',
+                (repo_slug, pr_id),
+            )
+            self.conn.commit()
+
+    def record_review(self, repo_slug: str, pr_id: int, review_id: int):
+        with self._lock:
+            self.conn.execute(
+                'INSERT OR IGNORE INTO posted_reviews (repo_slug, pr_id, review_id) VALUES (?, ?, ?)',
+                (repo_slug, pr_id, review_id),
+            )
+            self.conn.commit()
+
+    def get_review_ids(self, repo_slug: str, pr_id: int) -> list[int]:
+        with self._lock:
+            cur = self.conn.execute(
+                'SELECT review_id FROM posted_reviews WHERE repo_slug = ? AND pr_id = ?',
+                (repo_slug, pr_id),
+            )
+            return [row[0] for row in cur.fetchall()]
+
+    def delete_review(self, repo_slug: str, pr_id: int, review_id: int):
+        with self._lock:
+            self.conn.execute(
+                'DELETE FROM posted_reviews WHERE repo_slug = ? AND pr_id = ? AND review_id = ?',
+                (repo_slug, pr_id, review_id),
+            )
+            self.conn.commit()
+
+    def delete_reviews(self, repo_slug: str, pr_id: int):
+        with self._lock:
+            self.conn.execute(
+                'DELETE FROM posted_reviews WHERE repo_slug = ? AND pr_id = ?',
                 (repo_slug, pr_id),
             )
             self.conn.commit()
