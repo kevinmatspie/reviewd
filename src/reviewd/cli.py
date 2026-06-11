@@ -4,6 +4,7 @@ import importlib.metadata
 import logging
 import logging.handlers
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -12,7 +13,7 @@ import click
 from reviewd.colors import BOLD_RED, CLEAR_LINE, CYAN, DIM, GREEN, RED, RESET, YELLOW
 from reviewd.config import get_provider, load_global_config
 from reviewd.daemon import review_single_pr, run_poll_loop
-from reviewd.models import CLI, GlobalConfig
+from reviewd.models import CLI, GlobalConfig, RepoConfig
 from reviewd.state import StateDB
 
 try:
@@ -31,6 +32,65 @@ def _apply_cli_override(config: GlobalConfig, cli: str | None):
     config.cli = cli_enum
     for repo in config.repos:
         repo.cli = cli_enum
+
+
+def _get_repo_config(config: GlobalConfig, repo_arg: str) -> RepoConfig | None:
+    repo_config = next((r for r in config.repos if r.name == repo_arg), None)
+    if repo_config:
+        return repo_config
+    target = (Path.cwd() if repo_arg == '.' else Path(repo_arg).expanduser()).resolve()
+    return next((r for r in config.repos if Path(r.path).resolve() == target), None)
+
+
+def _interactive_select(options: list[tuple[str, str]]) -> str | None:
+    """Pick an option via fzf if available, else a numbered prompt. Returns the value, or None."""
+    if not options:
+        return None
+
+    import shutil
+
+    if shutil.which('fzf'):
+        input_text = '\n'.join(f'{i}\t{i + 1:2}) {display}' for i, (display, _) in enumerate(options))
+        try:
+            result = subprocess.run(
+                [
+                    'fzf',
+                    '--prompt=Select a PR to review> ',
+                    '--height=40%',
+                    '--layout=reverse',
+                    '--border',
+                    '--ansi',
+                    '--delimiter=\t',
+                    '--with-nth=2..',
+                ],
+                input=input_text,
+                text=True,
+                capture_output=True,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                idx = int(result.stdout.split('\t', 1)[0])
+                return options[idx][1]
+        except (ValueError, OSError):
+            pass
+        return None
+
+    for i, (display, _) in enumerate(options, 1):
+        click.echo(f'{i}) {display}')
+    while True:
+        try:
+            choice = input('\nEnter number to review a PR (empty to cancel): ').strip()
+        except (KeyboardInterrupt, EOFError):
+            return None
+        if not choice:
+            return None
+        try:
+            idx = int(choice) - 1
+        except ValueError:
+            click.echo('Please enter a valid number.')
+            continue
+        if 0 <= idx < len(options):
+            return options[idx][1]
+        click.echo('Invalid selection.')
 
 
 PROGRESS_LOG_LEVEL = 22
@@ -250,17 +310,126 @@ def pr(ctx, repo: str, pr_id: int, verbose: bool, dry_run: bool, force: bool, cl
     review_single_pr(config, repo, pr_id=pr_id, dry_run=dry_run, force=force)
 
 
-@main.command(name='ls')
+@main.command()
+@click.argument('base_branch', required=False)
 @click.option('-v', '--verbose', is_flag=True, help='Enable verbose logging')
+@click.option('--cli', type=click.Choice(['claude', 'gemini', 'codex']), default=None, help='Override AI CLI')
 @click.pass_context
-def ls_repos(ctx, verbose: bool):
-    """List watched repos and their open PRs."""
+def scan(ctx, base_branch: str | None, verbose: bool, cli: str | None):
+    """Review local changes (including uncommitted work) against a base branch. Prints findings, posts nothing."""
+    from reviewd.commenter import post_review
+    from reviewd.config import load_project_config
+    from reviewd.models import PRInfo
+    from reviewd.reviewer import get_base_branch, get_current_branch, get_diff_lines, review_pr
+
     _resolve_verbose(ctx, verbose)
     _ensure_global_config(ctx.obj['config_path'])
     config = load_global_config(ctx.obj['config_path'])
+    _apply_cli_override(config, cli)
+
+    repo_config = _get_repo_config(config, '.')
+    if not repo_config:
+        available = ', '.join(r.name for r in config.repos) or '(none)'
+        click.echo(f'Current directory is not a configured repo. Available: {available}', err=True)
+        raise SystemExit(1)
+
+    repo_path = Path(repo_config.path)
+    try:
+        source_branch = get_current_branch(repo_path)
+        if base_branch is None:
+            base_branch = get_base_branch(repo_path)
+        # Prefer a remote-tracking base so the diff reflects what's new vs the server.
+        base_ref = base_branch
+        for remote in ('origin', 'upstream'):
+            res = subprocess.run(
+                ['git', 'rev-parse', '--verify', f'{remote}/{base_branch}'],
+                cwd=repo_path,
+                capture_output=True,
+                timeout=5,
+            )
+            if res.returncode == 0:
+                base_ref = f'{remote}/{base_branch}'
+                break
+    except RuntimeError as e:
+        click.echo(str(e), err=True)
+        raise SystemExit(1) from e
+
+    click.echo(f'{CYAN}Scanning: {source_branch} → {base_ref}{RESET}\n')
+
+    pr = PRInfo(
+        repo_slug=repo_config.slug,
+        pr_id=0,
+        title=f'Local Scan: {source_branch}',
+        author='local',
+        source_branch=source_branch,
+        destination_branch=base_ref,
+        source_commit='HEAD',
+        url='',
+        is_local=True,
+    )
+
+    project_config = load_project_config(repo_path, config)
+    active_model = repo_config.model or config.model
+
+    diff_lines = get_diff_lines(str(repo_path), pr)
+    if diff_lines == 0:
+        click.echo(f'{GREEN}No changes detected between {source_branch} and {base_ref}.{RESET}')
+        return
+
+    result = review_pr(
+        str(repo_path),
+        pr,
+        project_config,
+        cli=repo_config.cli,
+        model=active_model,
+        cli_args=config.cli_args,
+        cli_defaults=config.cli_defaults,
+    )
+
     state_db = StateDB(config.state_db)
     try:
-        for repo_config in config.repos:
+        post_review(
+            None,
+            state_db,
+            pr,
+            result,
+            repo_config,
+            project_config,
+            config,
+            cli=repo_config.cli,
+            model=active_model,
+            dry_run=True,
+            diff_lines=diff_lines,
+        )
+    finally:
+        state_db.close()
+
+
+@main.command(name='ls')
+@click.argument('repo', metavar='[repo_name_or_path]', required=False)
+@click.option('-v', '--verbose', is_flag=True, help='Enable verbose logging')
+@click.option('--dry-run', is_flag=True, help='If a PR is selected, print review without posting')
+@click.option('--force', is_flag=True, help='If a PR is selected, review even if already reviewed')
+@click.pass_context
+def ls_repos(ctx, repo: str | None, verbose: bool, dry_run: bool, force: bool):
+    """List watched repos and their open PRs. In a terminal, select one to review."""
+    _resolve_verbose(ctx, verbose)
+    _ensure_global_config(ctx.obj['config_path'])
+    config = load_global_config(ctx.obj['config_path'])
+
+    target_repos = config.repos
+    if repo is not None:
+        repo_config = _get_repo_config(config, repo)
+        if not repo_config:
+            available = ', '.join(r.name for r in config.repos) or '(none)'
+            click.echo(f'Repo "{repo}" not found. Available: {available}', err=True)
+            raise SystemExit(1)
+        target_repos = [repo_config]
+
+    pr_options: list[tuple[str, str]] = []
+    state_db = StateDB(config.state_db)
+    try:
+        for repo_config in target_repos:
             provider_name = repo_config.provider or 'bitbucket'
             click.echo(f'\n{repo_config.name}  ({provider_name}, {repo_config.cli.value})')
             try:
@@ -273,13 +442,29 @@ def ls_repos(ctx, verbose: bool):
                     reviewed = state_db.has_review(pr.repo_slug, pr.pr_id, pr.source_commit)
                     marker = '\u2713' if reviewed else '\u2022'
                     click.echo(f'  {marker} #{pr.pr_id}  {pr.title}  ({pr.author})')
+                    display = (
+                        f'{CYAN}[{repo_config.name}]{RESET} {YELLOW}#{pr.pr_id}{RESET} '
+                        f'{pr.title} {DIM}({pr.author}){RESET} {marker}'
+                    )
+                    pr_options.append((display, f'{repo_config.name} {pr.pr_id}'))
             except Exception as e:
                 click.echo(f'  Error: {e}')
     finally:
         state_db.close()
+
+    if not pr_options or not sys.stdin.isatty():
+        click.echo()
+        click.echo('To review a PR:  reviewd pr <repo> <id>')
+        click.echo('To review a PR (dry run):  reviewd pr <repo> <id> --dry-run')
+        return
+
     click.echo()
-    click.echo('To review a PR:  reviewd pr <repo> <id>')
-    click.echo('To review a PR (dry run):  reviewd pr <repo> <id> --dry-run')
+    selected = _interactive_select(pr_options)
+    if not selected:
+        return
+    sel_repo, sel_pr_id = selected.rsplit(' ', 1)
+    click.echo(f'\n{CYAN}Reviewing: reviewd pr {sel_repo} {sel_pr_id}{RESET}\n')
+    review_single_pr(config, sel_repo, pr_id=int(sel_pr_id), dry_run=dry_run, force=force)
 
 
 @main.command()

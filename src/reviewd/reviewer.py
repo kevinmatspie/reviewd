@@ -222,17 +222,71 @@ def cleanup_worktree(repo_path: str, pr: PRInfo):
         logger.info('Cleaned up worktree at %s', worktree_dir)
 
 
-def get_diff_lines(repo_path: str, pr: PRInfo) -> int:
-    with _repo_locks[repo_path]:
-        subprocess.run(
-            ['git', 'fetch', 'origin', pr.source_branch, pr.destination_branch],
+def get_current_branch(repo_path: str | Path) -> str:
+    result = subprocess.run(
+        ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f'Could not get current branch: {result.stderr.strip()}')
+    return result.stdout.strip()
+
+
+def get_base_branch(repo_path: str | Path) -> str:
+    result = subprocess.run(
+        ['git', 'rev-parse', '--abbrev-ref', 'origin/HEAD'],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if result.returncode == 0:
+        ref = result.stdout.strip()
+        return ref.split('/', 1)[1] if '/' in ref else ref
+
+    for b in ['main', 'master']:
+        res = subprocess.run(
+            ['git', 'rev-parse', '--verify', b],
             cwd=repo_path,
             capture_output=True,
-            env=_GIT_ENV,
-            timeout=120,
+            timeout=5,
         )
+        if res.returncode == 0:
+            return b
+
+    return 'main'
+
+
+def get_diff_lines(repo_path: str, pr: PRInfo) -> int:
+    if pr.is_local:
+        # Diff the working tree (committed + uncommitted) against the merge-base
+        # with the base ref, so the count matches what the reviewer sees.
+        merge_base = subprocess.run(
+            ['git', 'merge-base', pr.destination_branch, 'HEAD'],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if merge_base.returncode != 0:
+            logger.warning('Could not compute merge-base for local scan, proceeding anyway')
+            return -1
+        diff_base = merge_base.stdout.strip()
+    else:
+        with _repo_locks[repo_path]:
+            subprocess.run(
+                ['git', 'fetch', 'origin', pr.source_branch, pr.destination_branch],
+                cwd=repo_path,
+                capture_output=True,
+                env=_GIT_ENV,
+                timeout=120,
+            )
+        diff_base = f'origin/{pr.destination_branch}...origin/{pr.source_branch}'
     result = subprocess.run(
-        ['git', 'diff', '--shortstat', f'origin/{pr.destination_branch}...origin/{pr.source_branch}'],
+        ['git', 'diff', '--shortstat', diff_base],
         cwd=repo_path,
         capture_output=True,
         text=True,
@@ -538,13 +592,14 @@ def review_pr(
     cli_args: list[str] | None = None,
     cli_defaults: dict[CLI, list[str]] | None = None,
 ) -> ReviewResult:
-    worktree_path = create_worktree(repo_path, pr)
+    worktree_path = None if pr.is_local else create_worktree(repo_path, pr)
+    review_cwd = worktree_path or repo_path
     try:
         prompt = build_review_prompt(pr, project_config)
         t0 = time.monotonic()
         output = invoke_cli(
             prompt,
-            worktree_path,
+            review_cwd,
             cli=cli,
             timeout=timeout,
             model=model,
@@ -561,6 +616,7 @@ def review_pr(
         logger.info('Review has %d findings', len(result.findings))
         return result
     finally:
-        logger.debug('Cleaning up worktree for PR #%d', pr.pr_id)
-        cleanup_worktree(repo_path, pr)
-        logger.debug('Worktree cleanup done')
+        if worktree_path:
+            logger.debug('Cleaning up worktree for PR #%d', pr.pr_id)
+            cleanup_worktree(repo_path, pr)
+            logger.debug('Worktree cleanup done')

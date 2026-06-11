@@ -66,6 +66,7 @@ class PRInfo:
     source_commit: str
     url: str
     draft: bool = False
+    is_local: bool = False
 
 
 @dataclass

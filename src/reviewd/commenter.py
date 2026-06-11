@@ -326,7 +326,8 @@ def post_review(
     inline_severities = {s for s in project_config.inline_comments_for}
     inline_findings = [f for f in result.findings if f.severity.value in inline_severities and f.file and f.line]
 
-    inline_findings = _filter_inline_findings_by_diff(inline_findings, provider, pr)
+    if not pr.is_local:
+        inline_findings = _filter_inline_findings_by_diff(inline_findings, provider, pr)
 
     max_inline = project_config.max_inline_comments
     if max_inline is not None and len(inline_findings) > max_inline:
@@ -339,11 +340,9 @@ def post_review(
 
     inline_ids = {id(f) for f in inline_findings}
 
-    use_formal = (
-        provider.supports_formal_review
-        and effective_formal_review(global_config, repo_config)
-    )
-    if effective_formal_review(global_config, repo_config) and not provider.supports_formal_review:
+    formal_requested = provider is not None and effective_formal_review(global_config, repo_config)
+    use_formal = formal_requested and provider.supports_formal_review
+    if formal_requested and not provider.supports_formal_review:
         logger.warning(
             'formal_review enabled but provider %s does not support it — falling back to comment-based review',
             type(provider).__name__,
