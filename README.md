@@ -24,6 +24,8 @@ https://github.com/user-attachments/assets/e99705d6-5595-478e-b5de-f47d3abcfa37
 - **Runs real commands** — configure linters, type checkers, and test suites to run during review. Failures are included in the AI's analysis.
 - **Structured output** — severity-tagged findings with inline comments on specific lines and a summary comment.
 - **Batch mode or one-shot** — review a single PR on demand, or run a continuous local review loop across all your repos in an open terminal.
+- **Local scan** — `reviewd scan` reviews your current branch plus uncommitted changes against a base ref before you ever open a PR. Always dry-run — prints findings, posts nothing.
+- **Interactive selection** — `reviewd ls` lists open PRs and, in a terminal, lets you pick one to review with `fzf` (numbered prompt as fallback).
 - **Multi-repo, multi-AI** — different repos can use different AI backends, models, and review instructions.
 - **Smart re-reviews** — new commits on a PR trigger a fresh review; old comments are cleaned up automatically.
 - **Draft-aware** — in batch mode, drafts are skipped unless the title contains `[review]`, `[claudiu]`, `[ask]`, or `[bot review]`. The `pr` command always reviews regardless of draft status.
@@ -132,6 +134,7 @@ Both providers can be used in the same config. Tokens support `${ENV_VAR}` subst
 reviewd pr my-project 42           # one-shot review
 reviewd pr my-project 42 --dry-run # preview without posting
 reviewd watch -v                   # continuous review loop
+reviewd scan                       # review local changes before opening a PR
 ```
 
 ## How It Works
@@ -261,12 +264,14 @@ reviews are formal; `auto_approve` controls whether reviewd is allowed to approv
 reviewd init                                  # interactive setup wizard
 reviewd init --sample                         # write sample config (skip wizard)
 reviewd ls                                    # list repos and open PRs
+reviewd ls [repo]                             # in a terminal, pick a PR (fzf) to review
 reviewd watch -v                              # continuous review loop (verbose)
 reviewd watch -v --dry-run                    # preview, no posting
 reviewd watch -v --review-existing            # review not-yet-reviewed open PRs
 reviewd watch --concurrency 8                 # override max concurrent reviews
 reviewd pr <repo> <id>                        # one-shot review (reviews drafts too)
 reviewd pr <repo> <id> --force                # re-review (bypasses already-reviewed/cooldown/skip)
+reviewd scan [base_branch]                    # review local + uncommitted changes (dry-run, posts nothing)
 reviewd status <repo>                         # review history
 ```
 
