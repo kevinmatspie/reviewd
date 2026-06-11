@@ -25,11 +25,11 @@ Source commit: {source_commit}
 Perform a thorough code review of this pull request.
 
 1. Look for project context: check for CLAUDE.md, GEMINI.md, or AGENTS.md at the repo root. If none exist, read README.md instead. Use these to understand project conventions before reviewing.
-2. Understand the PR evolution: run `git log --reverse --format='%h %s' origin/{destination}..HEAD` to see \
+2. Understand the PR evolution: run `git log --reverse --format='%h %s' {destination}..HEAD` to see \
 every commit in order. Commit messages reveal intent — pay close attention. \
 For multi-commit PRs, skim individual commits with `git show <hash>` to see what changed at each step. \
 If something was introduced then reverted (or vice-versa), the author already tried that approach — do NOT suggest it again.
-3. Compute the full diff: run `git merge-base origin/{destination} HEAD`, then `git diff <merge-base>..HEAD`
+3. Compute the full diff: run `git merge-base {destination} HEAD`, then `git diff <merge-base>..HEAD`
 4. Read the changed files in full to understand surrounding context
 5. Explore related code (how changed functions are used, related models/views/utilities)
 {validation_section}\
@@ -43,9 +43,29 @@ If something was introduced then reverted (or vice-versa), the author already tr
 ## Important
 - ONLY review code that is part of the diff. Do NOT flag pre-existing issues in unchanged code, even if the changed code interacts with it. If you notice a pre-existing problem, you may mention it as context but do NOT create a finding for it.
 - Be constructive and specific — every issue must include a concrete suggested fix.
-- If the code looks fine, say so. Do NOT invent issues to justify the review. An empty findings list is a valid and preferred outcome for clean code. Only report issues that are genuinely useful — the goal is to help, not to nitpick or frustrate.
+- If the code looks fine, say so. Do NOT invent issues to justify the review. An empty findings list is a valid and preferred outcome for clean code.
 - Double-check every "line" number before including it. The line number must point to the EXACT line in the diff where the issue occurs. Off-by-one errors make inline comments appear on the wrong line.
 - When in doubt, re-read the file to verify the line number.
+
+## Bug Bar — When to Flag (critical and suggestion only)
+For `critical` and `suggestion` findings, ALL must hold:
+- Meaningfully impacts correctness, security, performance, or maintainability.
+- Discrete and actionable — one concrete issue, not a vague combination.
+- Author would plausibly want to fix it once aware. If they'd shrug, downgrade to `nitpick` or drop.
+- Does not rely on unstated assumptions about author intent. If the change looks deliberate, treat it as deliberate.
+- Required rigor matches the rest of the codebase. Do not demand validation, comments, or tests not present elsewhere.
+- Speculation that a change "might break something else" is NOT enough. Identify the specific other code path that is provably affected and name it. Otherwise omit.
+
+For `nitpick`: optional polish, alternative approach. Author may or may not act on it — that is fine. Still must be specific and actionable, not vague taste.
+
+For `good`: praise for genuinely notable patterns or improvements. Skip generic praise. If nothing stands out, omit `good` findings entirely.
+
+## Comment Style
+- Matter-of-fact. No flattery ("Great job", "Nice work"), no accusation. Read as a helpful AI suggestion, not a human reviewer.
+- State the preconditions: which inputs, environments, or scenarios are required for the bug to manifest. Severity depends on these — say so when relevant.
+- Do not overstate severity. Inflated criticals erode trust faster than missed nits.
+- Keep `issue` brief — one short paragraph, no line breaks inside prose.
+- In `fix`, preserve EXACT leading whitespace of the original line (tabs vs spaces, exact count). Do not change outer indentation level unless that IS the fix.
 
 ## Output
 After completing your review, output EXACTLY this JSON block as the last thing in your response:
@@ -119,12 +139,14 @@ def build_review_prompt(
         severity_lines.append(f'Do NOT include {", ".join(skip)} findings.')
     severity_section = '\n'.join(severity_lines)
 
+    destination_ref = pr.destination_branch if pr.is_local else f'origin/{pr.destination_branch}'
+
     return REVIEW_TEMPLATE.format(
         pr_id=pr.pr_id,
         pr_title=pr.title,
         pr_author=pr.author,
         branch=pr.source_branch,
-        destination=pr.destination_branch,
+        destination=destination_ref,
         source_commit=pr.source_commit,
         validation_section=validation_section,
         severity_section=severity_section,
