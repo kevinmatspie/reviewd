@@ -257,7 +257,7 @@ def _collect_eligible_prs(
     state_db: StateDB,
 ) -> list[tuple[PRInfo, RepoConfig, ProjectConfig, GlobalConfig]]:
     provider = get_provider(global_config, repo_config)
-    project_config = load_project_config(repo_config.path, global_config)
+    project_config = load_project_config(repo_config.path, global_config, repo_config)
 
     logger.debug('Checking repo: %s', repo_config.name)
     prs = provider.list_open_prs(repo_config.slug)
@@ -514,7 +514,7 @@ def review_single_pr(
     cleanup_stale_worktrees(repo_config.path)
 
     provider = get_provider(global_config, repo_config)
-    project_config = load_project_config(repo_config.path, global_config)
+    project_config = load_project_config(repo_config.path, global_config, repo_config)
     state_db = StateDB(global_config.state_db)
 
     try:

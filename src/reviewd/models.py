@@ -118,6 +118,7 @@ class RepoConfig:
     model: str | None = None
     formal_review: bool | None = None
     watch_paths: list[str] = field(default_factory=list)
+    skip_severities: list[str] = field(default_factory=list)
 
     @property
     def slug(self) -> str:

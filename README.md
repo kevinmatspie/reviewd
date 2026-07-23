@@ -195,9 +195,12 @@ repos:
     provider: github              # watch_paths currently GitHub-only
     watch_paths:                  # folders to scope reviews to
       - Postman/
+    skip_severities: [nitpick]    # drop these severities without a .reviewd.yaml
 ```
 
 **`watch_paths`** (optional, GitHub-only) restricts reviewd to one or more folders inside a repo. PRs that touch none of the listed folders are skipped (via a cheap "list PR files" API call, before any clone), and for PRs that do, the model only ever sees the diff *under* those folders — the git commands are pathspec-filtered in code, not left to the model to decide. Paths are directory prefixes (e.g. `Postman/` matches everything beneath it). Omit `watch_paths` to review the whole repo as usual.
+
+**`skip_severities`** (optional) drops findings of the given severities (`critical`, `suggestion`, `nitpick`, `good`) — the operator-side equivalent of the per-repo `.reviewd.yaml` setting of the same name, for when you don't control the target repo. Values from both places are unioned. Invalid names are rejected at load time (so a typo fails loudly rather than silently doing nothing).
 
 ### Per-project (`.reviewd.yaml` in repo root)
 

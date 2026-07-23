@@ -17,6 +17,7 @@ from reviewd.models import (
     GlobalConfig,
     ProjectConfig,
     RepoConfig,
+    Severity,
 )
 from reviewd.providers.base import GitProvider
 
@@ -165,6 +166,16 @@ def load_global_config(path: str | Path | None = None) -> GlobalConfig:
         watch_paths = repo_data.get('watch_paths') or []
         if not isinstance(watch_paths, list) or not all(isinstance(p, str) for p in watch_paths):
             raise SystemExit(f'Repo #{i + 1} "watch_paths" in {path} must be a list of strings')
+        skip_severities = repo_data.get('skip_severities') or []
+        if not isinstance(skip_severities, list) or not all(isinstance(s, str) for s in skip_severities):
+            raise SystemExit(f'Repo #{i + 1} "skip_severities" in {path} must be a list of strings')
+        valid_severities = {s.value for s in Severity}
+        invalid = [s for s in skip_severities if s not in valid_severities]
+        if invalid:
+            raise SystemExit(
+                f'Repo #{i + 1} "skip_severities" in {path} has invalid values {invalid}; '
+                f'valid: {sorted(valid_severities)}'
+            )
         repos.append(
             RepoConfig(
                 name=repo_data['name'],
@@ -177,6 +188,7 @@ def load_global_config(path: str | Path | None = None) -> GlobalConfig:
                 model=repo_data.get('model', data.get('model')),
                 formal_review=repo_data.get('formal_review'),  # None = inherit from global
                 watch_paths=watch_paths,
+                skip_severities=skip_severities,
             )
         )
 
@@ -275,8 +287,14 @@ def _read_project_config_data(repo_path: str | Path) -> dict:
     return {}
 
 
-def load_project_config(repo_path: str | Path, global_config: GlobalConfig) -> ProjectConfig:
+def load_project_config(
+    repo_path: str | Path, global_config: GlobalConfig, repo_config: RepoConfig | None = None
+) -> ProjectConfig:
     data = _read_project_config_data(repo_path)
+
+    # Operator-set (config.yaml) skips union with any per-repo .reviewd.yaml skips.
+    repo_skips = repo_config.skip_severities if repo_config else []
+    skip_severities = list(dict.fromkeys([*repo_skips, *data.get('skip_severities', [])]))
 
     # Merge instructions: global + per-project
     parts = []
@@ -300,7 +318,7 @@ def load_project_config(repo_path: str | Path, global_config: GlobalConfig) -> P
         test_commands=data.get('test_commands', []),
         inline_comments_for=data.get('inline_comments_for', global_config.inline_comments_for or ['critical']),
         max_inline_comments=data.get('max_inline_comments'),
-        skip_severities=data.get('skip_severities', []),
+        skip_severities=skip_severities,
         show_overview=data.get('show_overview', False),
         min_diff_lines=data.get('min_diff_lines', 0),
         min_diff_lines_update=data.get('min_diff_lines_update', 5),
