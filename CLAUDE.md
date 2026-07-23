@@ -52,3 +52,4 @@ rm -rf dist && uv build && uv publish
 - Codex CLI outputs raw JSON (no markdown fences) — extract_json falls back to raw JSON object parsing
 - Inline suggestions are single-line only (TODO: multi-line support)
 - AI may hallucinate line numbers — prompt instructs to double-check but not guaranteed
+- Behind a TLS-inspection proxy, cert-verify failures surface as `httpx.ConnectError` and log as "Network unavailable" (misleading — network is fine). Check the cert issuer; fix at the proxy or via the OS trust store, not a corporate-only CA bundle. See README troubleshooting section

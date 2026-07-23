@@ -318,6 +318,17 @@ reviewd status <repo>                         # review history
 - `test_commands` come only from the repo owner's config, not from PR content
 - Prompt injection attempts in code under review are flagged as security findings
 
+## Troubleshooting: "Network unavailable" behind a corporate proxy
+
+If reviewd logs `Network unavailable` but the network is fine, suspect **TLS inspection** — a corporate MITM proxy (Zscaler, Netskope, etc.) re-signs HTTPS with a private CA, and the cert-verification failure surfaces as `httpx.ConnectError`, which the retry wrapper reports as a network outage. Confirm by checking who issued the cert:
+
+```bash
+openssl s_client -connect api.github.com:443 -servername api.github.com </dev/null 2>/dev/null | openssl x509 -noout -issuer
+# a corporate CA (not the site's real issuer) = inspection is intercepting you
+```
+
+The right fix is to have your proxy team stop inspecting the API/git endpoints, or to trust the corporate CA via your **OS trust store** (which stays current as the CA rotates). If you must set a client-side CA bundle instead, make it **additive** — your language/tool's public roots (e.g. `certifi`) *plus* the corporate CA — never corporate-only, or it breaks the moment inspection is turned off.
+
 ## Roadmap
 
 - [x] Parallel PR review queue
