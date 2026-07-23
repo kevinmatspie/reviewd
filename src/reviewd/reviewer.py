@@ -90,6 +90,19 @@ def cleanup_stale_worktrees(repo_path: str):
             logger.info('Force-cleaned worktree: %s', entry.name)
 
 
+def _commit_present(repo_path: str, commit: str) -> bool:
+    if not commit:
+        return False
+    result = subprocess.run(
+        ['git', 'cat-file', '-e', f'{commit}^{{commit}}'],
+        cwd=repo_path,
+        capture_output=True,
+        env=_GIT_ENV,
+        timeout=10,
+    )
+    return result.returncode == 0
+
+
 def create_worktree(repo_path: str, pr: PRInfo) -> str:
     worktree_dir = Path(repo_path) / '.reviewd-worktrees' / f'pr-{pr.pr_id}'
     worktree_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -98,56 +111,52 @@ def create_worktree(repo_path: str, pr: PRInfo) -> str:
         cleanup_worktree(repo_path, pr)
 
     with _repo_locks[repo_path]:
-        # Try fetching branch by name first; fall back to PR ref or commit hash
-        # (source branch may live on a fork or have been deleted after merge)
-        pr_ref_fetched = False
-        fetch_result = subprocess.run(
-            ['git', 'fetch', 'origin', pr.source_branch, pr.destination_branch],
+        # The destination branch is required for the reviewer's merge-base.
+        dest_result = subprocess.run(
+            ['git', 'fetch', 'origin', pr.destination_branch],
             cwd=repo_path,
             capture_output=True,
             env=_GIT_ENV,
             timeout=120,
         )
-        if fetch_result.returncode != 0:
-            logger.warning('Source branch fetch failed: %s', fetch_result.stderr.decode().strip())
-            dest_result = subprocess.run(
-                ['git', 'fetch', 'origin', pr.destination_branch],
-                cwd=repo_path,
-                capture_output=True,
-                env=_GIT_ENV,
-                timeout=120,
+        if dest_result.returncode != 0:
+            raise RuntimeError(
+                f'Cannot fetch destination branch {pr.destination_branch}: '
+                f'{dest_result.stderr.decode().strip()}'
             )
-            if dest_result.returncode != 0:
-                raise RuntimeError(
-                    f'Cannot fetch destination branch {pr.destination_branch}: '
-                    f'{dest_result.stderr.decode().strip()}'
-                )
-            # Try PR refs (works for forks and deleted branches)
+
+        # Check out the exact head commit. Fetching origin/<source_branch> is
+        # unreliable for forks: when the fork's branch name collides with one on
+        # origin (e.g. fork:main -> base:main), origin/<branch> resolves to the
+        # wrong commit and the diff comes out empty. Fetch best-effort by branch,
+        # then fall back to the PR head ref until the head SHA is present locally.
+        subprocess.run(
+            ['git', 'fetch', 'origin', pr.source_branch],
+            cwd=repo_path,
+            capture_output=True,
+            env=_GIT_ENV,
+            timeout=120,
+        )
+        if not _commit_present(repo_path, pr.source_commit):
             # GitHub: refs/pull/<id>/head, BitBucket: refs/pull-requests/<id>/from
-            for pr_ref in [f'pull/{pr.pr_id}/head', f'pull-requests/{pr.pr_id}/from']:
-                ref_result = subprocess.run(
+            for pr_ref in (f'pull/{pr.pr_id}/head', f'pull-requests/{pr.pr_id}/from'):
+                subprocess.run(
                     ['git', 'fetch', 'origin', pr_ref],
                     cwd=repo_path,
                     capture_output=True,
                     env=_GIT_ENV,
                     timeout=120,
                 )
-                if ref_result.returncode == 0:
-                    logger.info('Fetched PR via ref: %s', pr_ref)
-                    pr_ref_fetched = True
+                if _commit_present(repo_path, pr.source_commit):
+                    logger.info('Fetched PR #%d head via ref: %s', pr.pr_id, pr_ref)
                     break
+        if not _commit_present(repo_path, pr.source_commit):
+            raise RuntimeError(
+                f'Cannot obtain head commit {pr.source_commit[:8]} for PR #{pr.pr_id} '
+                '(fork with deleted branch, or commit not fetchable)'
+            )
 
-        # Use branch ref if available, then FETCH_HEAD (from PR ref), then commit hash
-        checkout_ref = f'origin/{pr.source_branch}'
-        ref_check = subprocess.run(
-            ['git', 'rev-parse', '--verify', checkout_ref],
-            cwd=repo_path,
-            capture_output=True,
-            env=_GIT_ENV,
-            timeout=10,
-        )
-        if ref_check.returncode != 0:
-            checkout_ref = 'FETCH_HEAD' if pr_ref_fetched else pr.source_commit
+        checkout_ref = pr.source_commit
 
         wt_result = subprocess.run(
             [
