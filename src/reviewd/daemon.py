@@ -16,6 +16,7 @@ from pathlib import Path
 import click
 import httpx
 
+from reviewd import scope
 from reviewd.colors import BOLD_WHITE, CLEAR_LINE, CYAN, DIM, GREEN, RESET, WHITE, YELLOW
 from reviewd.commenter import post_review
 from reviewd.config import get_provider, load_project_config
@@ -192,7 +193,7 @@ def _process_pr(
         threshold = project_config.min_diff_lines_update if is_update else project_config.min_diff_lines
         needs_diff = threshold > 0 or project_config.auto_approve.max_diff_lines is not None
         if needs_diff:
-            diff_lines = get_diff_lines(repo_config.path, pr)
+            diff_lines = get_diff_lines(repo_config.path, pr, repo_config.watch_paths)
             if threshold > 0 and 0 <= diff_lines < threshold:
                 logger.info('PR #%d diff too small (%d lines < %d), skipping', pr.pr_id, diff_lines, threshold)
                 return
@@ -221,6 +222,7 @@ def _process_pr(
             model=repo_config.model or global_config.model,
             cli_args=global_config.cli_args,
             cli_defaults=global_config.cli_defaults,
+            watch_paths=repo_config.watch_paths,
         )
         if _shutdown_event.is_set():
             state_db.finish_review(pr.repo_slug, pr.pr_id, pr.source_commit, error='shutdown')
@@ -276,6 +278,11 @@ def _collect_eligible_prs(
             if minutes is not None and minutes < project_config.review_cooldown_minutes:
                 remaining = int(project_config.review_cooldown_minutes - minutes)
                 logger.debug('PR #%d in cooldown (%dmin remaining), skipping', pr.pr_id, remaining)
+                continue
+        if repo_config.watch_paths:
+            changed = provider.list_pr_files(repo_config.slug, pr.pr_id)
+            if not scope.any_in_scope(changed, repo_config.watch_paths):
+                logger.debug('PR #%d touches no watched paths, skipping', pr.pr_id)
                 continue
         eligible.append((pr, repo_config, project_config, global_config))
     return eligible

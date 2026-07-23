@@ -14,6 +14,7 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
+from reviewd import scope
 from reviewd.models import (
     CLI,
     Finding,
@@ -260,7 +261,7 @@ def get_base_branch(repo_path: str | Path) -> str:
     return 'main'
 
 
-def get_diff_lines(repo_path: str, pr: PRInfo) -> int:
+def get_diff_lines(repo_path: str, pr: PRInfo, watch_paths: list[str] | None = None) -> int:
     if pr.is_local:
         # Diff the working tree (committed + uncommitted) against the merge-base
         # with the base ref, so the count matches what the reviewer sees.
@@ -286,7 +287,7 @@ def get_diff_lines(repo_path: str, pr: PRInfo) -> int:
             )
         diff_base = f'origin/{pr.destination_branch}...origin/{pr.source_branch}'
     result = subprocess.run(
-        ['git', 'diff', '--shortstat', diff_base],
+        ['git', 'diff', '--shortstat', diff_base, *scope.pathspec_args(watch_paths or [])],
         cwd=repo_path,
         capture_output=True,
         text=True,
@@ -591,11 +592,12 @@ def review_pr(
     model: str | None = None,
     cli_args: list[str] | None = None,
     cli_defaults: dict[CLI, list[str]] | None = None,
+    watch_paths: list[str] | None = None,
 ) -> ReviewResult:
     worktree_path = None if pr.is_local else create_worktree(repo_path, pr)
     review_cwd = worktree_path or repo_path
     try:
-        prompt = build_review_prompt(pr, project_config)
+        prompt = build_review_prompt(pr, project_config, watch_paths=watch_paths)
         t0 = time.monotonic()
         output = invoke_cli(
             prompt,

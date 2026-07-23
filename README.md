@@ -188,7 +188,16 @@ repos:
     workspace: your-workspace
     cli: gemini                   # or "codex"
     model: gemini-2.5-pro
+
+  - name: qa-postman              # watch one tool inside a monorepo
+    repo_slug: owner/QAmonorepo
+    path: ~/repos/QAmonorepo
+    provider: github              # watch_paths currently GitHub-only
+    watch_paths:                  # folders to scope reviews to
+      - Postman/
 ```
+
+**`watch_paths`** (optional, GitHub-only) restricts reviewd to one or more folders inside a repo. PRs that touch none of the listed folders are skipped (via a cheap "list PR files" API call, before any clone), and for PRs that do, the model only ever sees the diff *under* those folders — the git commands are pathspec-filtered in code, not left to the model to decide. Paths are directory prefixes (e.g. `Postman/` matches everything beneath it). Omit `watch_paths` to review the whole repo as usual.
 
 ### Per-project (`.reviewd.yaml` in repo root)
 

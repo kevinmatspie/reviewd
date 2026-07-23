@@ -162,6 +162,9 @@ def load_global_config(path: str | Path | None = None) -> GlobalConfig:
             repo_gh = _parse_github_config(repo_data['github'])
 
         repo_cli = _parse_cli(repo_data['cli'], repo_data['name']) if 'cli' in repo_data else global_cli
+        watch_paths = repo_data.get('watch_paths') or []
+        if not isinstance(watch_paths, list) or not all(isinstance(p, str) for p in watch_paths):
+            raise SystemExit(f'Repo #{i + 1} "watch_paths" in {path} must be a list of strings')
         repos.append(
             RepoConfig(
                 name=repo_data['name'],
@@ -173,6 +176,7 @@ def load_global_config(path: str | Path | None = None) -> GlobalConfig:
                 cli=repo_cli,
                 model=repo_data.get('model', data.get('model')),
                 formal_review=repo_data.get('formal_review'),  # None = inherit from global
+                watch_paths=watch_paths,
             )
         )
 

@@ -58,3 +58,6 @@ class GitProvider(ABC):
 
     @abstractmethod
     def get_diff_lines(self, repo_slug: str, pr_id: int) -> dict[str, set[int]]: ...
+
+    def list_pr_files(self, repo_slug: str, pr_id: int) -> list[str]:
+        raise NotImplementedError('watch_paths folder scoping is not supported for this provider')
