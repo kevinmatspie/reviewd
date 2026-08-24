@@ -14,6 +14,8 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
+from json_repair import repair_json
+
 from reviewd import scope
 from reviewd.models import (
     CLI,
@@ -568,6 +570,17 @@ def extract_json(output: str) -> dict:
             logger.warning('Fixed trailing commas in AI JSON output')
             return json.loads(fixed, strict=False)
         except json.JSONDecodeError as e:
+            # Last resort: json-repair handles what the strict parsers can't —
+            # unescaped quotes inside string values, missing delimiters, stray
+            # backslashes. Kept last because it coerces aggressively; only reach
+            # for it once the strict passes have genuinely failed.
+            try:
+                repaired = json.loads(repair_json(raw), strict=False)
+            except (json.JSONDecodeError, ValueError):
+                repaired = None
+            if isinstance(repaired, dict) and repaired:
+                logger.warning('Recovered AI JSON via json-repair')
+                return repaired
             # Dump the full AI output so the review can be salvaged manually
             # rather than throwing away the entire (paid-for) call.
             dump_path = Path(tempfile.gettempdir()) / f'reviewd-failed-{int(time.time())}.txt'
