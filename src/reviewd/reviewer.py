@@ -103,6 +103,38 @@ def _commit_present(repo_path: str, commit: str) -> bool:
     return result.returncode == 0
 
 
+def _ensure_head_commit(repo_path: str, pr: PRInfo) -> bool:
+    # Make pr.source_commit available locally. Fetching origin/<source_branch> is
+    # unreliable for forks: when the fork's branch name collides with one on
+    # origin (e.g. fork:main -> base:main), origin/<branch> resolves to the wrong
+    # commit. Fetch best-effort by branch, then fall back to the PR head ref until
+    # the head SHA is present. Callers must hold _repo_locks[repo_path].
+    if _commit_present(repo_path, pr.source_commit):
+        return True
+    subprocess.run(
+        ['git', 'fetch', 'origin', pr.source_branch],
+        cwd=repo_path,
+        capture_output=True,
+        env=_GIT_ENV,
+        timeout=120,
+    )
+    if _commit_present(repo_path, pr.source_commit):
+        return True
+    # GitHub: refs/pull/<id>/head, BitBucket: refs/pull-requests/<id>/from
+    for pr_ref in (f'pull/{pr.pr_id}/head', f'pull-requests/{pr.pr_id}/from'):
+        subprocess.run(
+            ['git', 'fetch', 'origin', pr_ref],
+            cwd=repo_path,
+            capture_output=True,
+            env=_GIT_ENV,
+            timeout=120,
+        )
+        if _commit_present(repo_path, pr.source_commit):
+            logger.info('Fetched PR #%d head via ref: %s', pr.pr_id, pr_ref)
+            break
+    return _commit_present(repo_path, pr.source_commit)
+
+
 def create_worktree(repo_path: str, pr: PRInfo) -> str:
     worktree_dir = Path(repo_path) / '.reviewd-worktrees' / f'pr-{pr.pr_id}'
     worktree_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -125,32 +157,9 @@ def create_worktree(repo_path: str, pr: PRInfo) -> str:
                 f'{dest_result.stderr.decode().strip()}'
             )
 
-        # Check out the exact head commit. Fetching origin/<source_branch> is
-        # unreliable for forks: when the fork's branch name collides with one on
-        # origin (e.g. fork:main -> base:main), origin/<branch> resolves to the
-        # wrong commit and the diff comes out empty. Fetch best-effort by branch,
-        # then fall back to the PR head ref until the head SHA is present locally.
-        subprocess.run(
-            ['git', 'fetch', 'origin', pr.source_branch],
-            cwd=repo_path,
-            capture_output=True,
-            env=_GIT_ENV,
-            timeout=120,
-        )
-        if not _commit_present(repo_path, pr.source_commit):
-            # GitHub: refs/pull/<id>/head, BitBucket: refs/pull-requests/<id>/from
-            for pr_ref in (f'pull/{pr.pr_id}/head', f'pull-requests/{pr.pr_id}/from'):
-                subprocess.run(
-                    ['git', 'fetch', 'origin', pr_ref],
-                    cwd=repo_path,
-                    capture_output=True,
-                    env=_GIT_ENV,
-                    timeout=120,
-                )
-                if _commit_present(repo_path, pr.source_commit):
-                    logger.info('Fetched PR #%d head via ref: %s', pr.pr_id, pr_ref)
-                    break
-        if not _commit_present(repo_path, pr.source_commit):
+        # Check out the exact head commit rather than origin/<source_branch>,
+        # which is unreliable for forks. See _ensure_head_commit.
+        if not _ensure_head_commit(repo_path, pr):
             raise RuntimeError(
                 f'Cannot obtain head commit {pr.source_commit[:8]} for PR #{pr.pr_id} '
                 '(fork with deleted branch, or commit not fetchable)'
@@ -287,14 +296,22 @@ def get_diff_lines(repo_path: str, pr: PRInfo, watch_paths: list[str] | None = N
         diff_base = merge_base.stdout.strip()
     else:
         with _repo_locks[repo_path]:
-            subprocess.run(
-                ['git', 'fetch', 'origin', pr.source_branch, pr.destination_branch],
+            dest = subprocess.run(
+                ['git', 'fetch', 'origin', pr.destination_branch],
                 cwd=repo_path,
                 capture_output=True,
                 env=_GIT_ENV,
                 timeout=120,
             )
-        diff_base = f'origin/{pr.destination_branch}...origin/{pr.source_branch}'
+            # Diff against the head SHA, not origin/<source_branch>: for a fork PR
+            # whose branch name collides with origin (fork:main -> base:main), the
+            # branch form yields origin/main...origin/main — an empty diff — and the
+            # PR is wrongly skipped as too small.
+            has_head = _ensure_head_commit(repo_path, pr)
+        if dest.returncode != 0 or not has_head:
+            logger.warning('Could not prepare refs for PR #%d diff size, proceeding anyway', pr.pr_id)
+            return -1
+        diff_base = f'origin/{pr.destination_branch}...{pr.source_commit}'
     result = subprocess.run(
         ['git', 'diff', '--shortstat', diff_base, *scope.pathspec_args(watch_paths or [])],
         cwd=repo_path,

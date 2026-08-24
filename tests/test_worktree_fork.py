@@ -4,7 +4,7 @@ import os
 import subprocess
 
 from reviewd.models import PRInfo
-from reviewd.reviewer import create_worktree
+from reviewd.reviewer import create_worktree, get_diff_lines
 
 _ID_ENV = {
     'GIT_AUTHOR_NAME': 't',
@@ -68,6 +68,39 @@ def test_create_worktree_checks_out_fork_head_not_colliding_branch(tmp_path):
     )
     worktree = create_worktree(str(clone), pr)
     assert _git(worktree, 'rev-parse', 'HEAD') == head_sha
+
+
+def test_get_diff_lines_counts_fork_head_not_colliding_branch(tmp_path):
+    # The size gate must not diff origin/main...origin/main (0 lines) for a fork PR
+    # whose branch name collides with origin, or the PR is wrongly skipped as too
+    # small. It must diff against the fork head SHA.
+    origin, seed = _seed_origin(tmp_path)
+
+    _git(seed, 'checkout', '-b', 'forkhead')
+    (seed / 'PlaywrightFramework').mkdir()
+    (seed / 'PlaywrightFramework' / 'x.py').write_text('print(1)\nprint(2)\n')
+    _git(seed, 'add', '.')
+    _git(seed, 'commit', '-m', 'fork change')
+    head_sha = _git(seed, 'rev-parse', 'HEAD')
+    _git(seed, 'push', 'origin', f'{head_sha}:refs/pull/1/head')
+
+    clone = tmp_path / 'clone'
+    _git(tmp_path, 'clone', str(origin), str(clone))
+
+    pr = PRInfo(
+        repo_slug='owner/repo',
+        pr_id=1,
+        title='t',
+        author='a',
+        source_branch='main',  # collides with origin's own main — the bug trigger
+        destination_branch='main',
+        source_commit=head_sha,
+        url='',
+    )
+    assert get_diff_lines(str(clone), pr) == 2
+    # watch_paths scoping still applies against the correct diff base.
+    assert get_diff_lines(str(clone), pr, ['PlaywrightFramework']) == 2
+    assert get_diff_lines(str(clone), pr, ['Nonexistent']) == 0
 
 
 def test_create_worktree_same_repo_branch(tmp_path):
