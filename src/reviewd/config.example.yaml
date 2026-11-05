@@ -103,8 +103,8 @@
 
 # Pass settings for the pipeline engine. `args` are extra CLI flags for that pass.
 # review:
-#   find:   { cli: copilot, model: gpt-6-sol, timeout: 900 }
-#   verify: { enabled: true, cli: copilot, model: gpt-6-sol, timeout: 600 }
+#   find:   { cli: copilot, model: gpt-6.1-sol, timeout: 900 }
+#   verify: { enabled: true, cli: copilot, model: gpt-6.1-sol, timeout: 600 }
 
 # --- Polling ---
 

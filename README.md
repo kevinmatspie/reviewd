@@ -288,8 +288,8 @@ context_repos:
     ref: main
     description: "Api endpoints, Shared/Data DTOs, Task import jobs"
 review:
-  find:   { cli: copilot, model: gpt-6-sol, timeout: 900 }
-  verify: { enabled: true, cli: copilot, model: gpt-6-sol, timeout: 600 }
+  find:   { cli: copilot, model: gpt-6.1-sol, timeout: 900 }
+  verify: { enabled: true, cli: copilot, model: gpt-6.1-sol, timeout: 600 }
 repos:
   - name: my-app
     engine: pipeline

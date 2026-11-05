@@ -150,7 +150,7 @@ This is the complete list, so you can revert any you don't want.
    - Create a **dedicated `COPILOT_HOME`** for the daemon, with `disableAllHooks: true`.
    - Re-run the spike as `mobiletest` to settle the token type and expiry, the auth-failure text (needed for `_AUTH_ERROR_PATTERN`), and whether `--sandbox` works there. Scripts: `~kevinm/reviewd-spike-scripts/`; use `run3.sh` for option A.
 2. **mobile-services context:** Create a dedicated clone with a **read-only deploy key**, not a dev checkout. Confirm `git fetch origin main` works non-interactively as `mobiletest`.
-3. **Config:** Add `context_repos.mobile-services` and the `review:` block with the model IDs. `gpt-6-sol` worked in the smoke test; `gpt-6.1-sol` is newer. Then set `engine: pipeline` and `context: [mobile-services]` on both app repos.
+3. **Config:** Add `context_repos.mobile-services` and the `review:` block with **`gpt-6.1-sol` for both passes** (your choice, 2026-11-05). A re-run of the smoke test with `gpt-6.1-sol` caught the same regression in 36 s with 2 premium requests (find: 5 model calls, about 77k input tokens; verify: 3 calls, about 21k). Then set `engine: pipeline` and `context: [mobile-services]` on both app repos.
 4. **Disable auto-approve** on both app repos for the first week.
 5. **Pick 6–8 evaluation PRs** (Task 14), then run `reviewd pr <repo> <id> --dry-run --force --engine legacy|pipeline` for each.
 6. **Deploy:** The live daemon runs `mobiletest`'s editable clone. It needs this branch merged or checked out there and a kickstart. There are no new dependencies beyond `904e268`'s `json-repair`; if that isn't installed in the tool env yet, it needs `uv tool install --reinstall --editable`.
