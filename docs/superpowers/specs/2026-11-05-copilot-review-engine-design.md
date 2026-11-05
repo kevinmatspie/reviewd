@@ -140,6 +140,67 @@ Repos without `engine: pipeline` use the global default, which is `legacy`. Cont
 - **Usage:** `--usage-output-file` records premium-request usage per pass. It is logged per review.
 - **Output format:** Confirm with a real dry run whether `-s` text or `--output-format json` gives the cleanest final message for `extract_json`.
 
+### Spike results (2026-11-05, Mac mini `dev-mac-01`, user `kevinm`)
+
+**Outcome: stop condition 1 hit. Implementation paused before Phase 1, pending Kevin's decision.**
+
+**Setup:**
+
+- **Versions:** Copilot CLI 1.0.105. The default model was `gpt-6-sol`. Auth came from `kevinm`'s stored login, with no `COPILOT_GITHUB_TOKEN` set.
+- **Location:** The spike directory was `~/reviewd-spike-1793920169`. It is not under `$TMPDIR` on purpose. By default Copilot can read the system temp directory, so a `mktemp -d` spike (as the plan wrote it) would make the "outside read" test meaningless.
+- **Flags:** The plan's provisional set, plus `--disallow-temp-dir`. Scripts: `~/reviewd-spike-scripts/{setup,run,run2}.sh`. Session transcripts: `session-*.md` in the spike directory.
+
+**Flag facts:**
+
+- **`--sandbox`:** Accepted, but undocumented in `copilot --help`. `copilot help sandbox` describes it. On macOS it uses Seatbelt (`sandbox-exec`) and applies to shell commands, not to built-in file edits.
+- **`--disallow-temp-dir`:** Needed. Without it, reads under `$TMPDIR` are allowed. That's where other reviews' prompt files and `reviewd-failed-*.txt` dumps live.
+- **Permission patterns:** `--allow-tool='shell(git log)'` works per subcommand. `git -c core.pager=… log` did *not* match it and was denied.
+- **Auto-approval beyond the allowlist:** Copilot auto-approves some commands we didn't allow. `git status` (including in an `&&` chain) and `cat` both ran. `cat ~/.ssh/known_hosts` was approved at the tool layer and was stopped only by the sandbox. **So the tool allowlist is not the read-only boundary. The sandbox is.**
+
+**Answers:**
+
+1. **Q1 (allowed operations):** Yes. `git log` ran, `view` read the cwd file, and `view` read the `--add-dir` file.
+2. **Q2 (blocked operations), part one:**
+   - **Blocked:** An outside read with `view` (sandbox: "Outside the sandbox's readable paths"). A `$TMPDIR` read. A write with `apply_patch` ("denied due to rules: write"). Direct `curl`. `git stash`, `git checkout -- .`, and `git push` (no approval available). `ls` outside the cwd. `env`. A compound `git log; cat <outside>`.
+   - **Blocked only by the sandbox's filesystem policy**, after the tool layer allowed them: `git diff --output=<file>`, `git log --output=<file>`, and `cat ~/.ssh/known_hosts`.
+3. **Q2 (blocked operations), part two: FAILED.**
+   - **Command execution:** `git grep` is on the allowlist, and `git grep -O'<cmd>' <pattern>` (`--open-files-in-pager`) runs an arbitrary command. `touch <file>` ran and was stopped only by the sandbox's write policy.
+   - **Network egress:** `git grep -O'curl -sS -m 10 https://example.com' print` **returned the full example.com page with `--sandbox` on**. The output ended with "Sandbox proxy could not reach the destination", but the page body had already arrived. So arbitrary commands and network egress are both reachable from an allowlisted command.
+   - **Why it matters:** PR content is attacker-controlled. A prompt injection can ask for exactly this.
+   - **Combined with env inheritance:** `invoke_cli` passes the daemon's full environment (minus `CLAUDECODE`), and the sandbox inherits it. That environment includes `BB_WORKSPACE_TOKEN`, `GITHUB_TOKEN`, and `CLAUDE_CODE_OAUTH_TOKEN`, so this is a credential-exfiltration path.
+   - **Other candidate vectors (not tested):** `git diff --no-index <any path> /dev/null` and `git blame --contents <path>` read arbitrary files, limited only by the sandbox's read policy.
+4. **Q3a (search):** The built-in `rg` tool searched across both the cwd and the `--add-dir` directory. This needs no shell.
+5. **Q3b (canaries):**
+   - **Repo instruction canaries:** `.github/copilot-instructions.md` and `AGENTS.md` were not loaded with `--no-custom-instructions`. The control run without the flag answered "Hi! BANANA".
+   - **`.mcp.json` canary:** Inconclusive. The model declined to list its MCP servers.
+   - **User-level hook:** **Ran.** A hook from `~/.copilot` ("global settings", `herdr-agent-state.sh`) was executed at `sessionStart` despite these flags. Only the sandbox stopped it.
+   - **User-level `~/.copilot/copilot-instructions.md`:** Inconclusive.
+   - **Implication:** A daemon should run Copilot with a dedicated `COPILOT_HOME` that sets `disableAllHooks: true`.
+6. **Q3 (output):** With `-s` text output, stdout is only the final answer, with the fenced JSON block last. That works for `extract_json`.
+7. **Q4 (usage):** `usage.json` has `totalPremiumRequestCost` (1 per run here), `totalNanoAiu`, per-model `requests`, `inputTokens`/`outputTokens`/`cacheReadTokens`/`reasoningTokens`, `totalApiDurationMs`, `currentModel`, and `codeChanges`. It contains no secrets.
+8. **Q5 (auth failure):** Not captured. `COPILOT_GITHUB_TOKEN=bogus` still authenticated, even with an empty `COPILOT_HOME`. The stored credential appears to live outside `COPILOT_HOME`, probably in the keychain, and to win over the env token, despite `copilot help environment` saying the env token takes precedence.
+   - **Deferred to Phase 7**, as `mobiletest` with no stored login: the token type, its expiry, and the failure text.
+   - **Q5a (secret masking):** `--secret-env-vars` was accepted. The masking check was inconclusive because the model refused to echo the variable.
+9. **Q6 (models):** `copilot help config` lists the model IDs.
+   - **GPT:** `gpt-6.1-sol`, `gpt-6-sol` (the default), `gpt-6-luna`, `gpt-6-astra`, `gpt-5.6-sol`/`terra`/`luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex`, `gpt-5-mini`.
+   - **Others:** `claude-*`, `gemini-*`, `grok-*`, `kimi-k3`, `mai-code-1.1-flash`.
+   - `--reasoning-effort none|minimal|low|medium|high|xhigh|max` exists.
+10. **Q7 (`--sandbox` for `mobiletest`):** Deferred to Phase 7. The question's premise is wrong: `mobiletest` is in the `admin` group (gid 80).
+
+**Options for Kevin (recommendation first):**
+
+- **A (recommended): No shell tool.**
+  - **What:** Python already computes the diff for anchoring, so it also computes `git log --reverse` and the full diff and puts both in the find and verify prompts. Copilot then runs with `--available-tools` limited to the built-in read tools (view / `rg` / glob; exact names to confirm). Keep `--sandbox`, `--disallow-temp-dir`, `--no-custom-instructions`, and `--disable-builtin-mcps`.
+  - **Benefit:** This removes the whole command-execution class instead of chasing git options one at a time.
+  - **Cost:**
+    - Bigger prompts.
+    - No per-commit `git show` or `git blame` for the model. Per-commit `--stat` can go in the prompt.
+- **B: Keep the shell, minus the dangerous subcommands.** Drop `git grep` from the allowlist and audit the rest (`--output`, `--no-index`, `--contents`, `--ext-diff`). This is fragile: every new execution vector reopens egress.
+- **Either way, as redundant safeguards:**
+  - Give the daemon a dedicated `COPILOT_HOME` with `disableAllHooks: true`, and with a sandbox network policy that denies egress if `settings.json` supports that.
+  - Strip the provider and AI tokens from the Copilot subprocess environment, or list them in `--secret-env-vars`.
+  - The same environment exposure already exists for the `legacy` Claude engine today.
+
 ## Failure handling
 
 | Failure | Behavior |
