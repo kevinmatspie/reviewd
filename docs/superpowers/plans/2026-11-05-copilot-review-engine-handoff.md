@@ -9,11 +9,7 @@ Written 2026-11-05 at the end of a brainstorming and planning session on Kevin's
    - `docs/superpowers/specs/2026-11-05-copilot-review-engine-design.md`: the approved design (what and why).
    - `docs/superpowers/plans/2026-11-05-copilot-review-engine.md`: the task-by-task plan (how).
 2. **Follow** "Before writing any code" below.
-3. **Execute the plan** with `superpowers:executing-plans`, or `superpowers:subagent-driven-development` if you prefer, Phase 0 through Phase 6. **Stop before Phase 7.** It needs Kevin.
-
-**Kickoff prompt** Kevin can paste into a new Claude Code session on the mini, from the dev checkout:
-
-> Read `docs/superpowers/plans/2026-11-05-copilot-review-engine-handoff.md` and follow it exactly. Then implement `docs/superpowers/plans/2026-11-05-copilot-review-engine.md` (Phases 0–6) using superpowers:executing-plans. Work unattended: commit and push the feature branch at each checkpoint, and only stop for the stop conditions listed in the handoff.
+3. **Execute the plan** in your session or with subagent driven development if you prefer, Phase 0 through Phase 6. Check in with your advisor along the way. **Stop before Phase 7.** It needs Kevin.
 
 ## Why this exists (30-second version)
 

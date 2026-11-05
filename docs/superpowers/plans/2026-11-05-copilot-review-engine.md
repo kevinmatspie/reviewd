@@ -1,7 +1,5 @@
 # Copilot Review Engine Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
-
 **Read first, in this order:**
 
 1. `docs/superpowers/plans/2026-11-05-copilot-review-engine-handoff.md`: machine setup, safety rules, autonomy and stop conditions.
