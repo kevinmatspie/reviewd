@@ -104,6 +104,7 @@ class CLI(enum.StrEnum):
     CLAUDE = 'claude'
     GEMINI = 'gemini'
     CODEX = 'codex'
+    COPILOT = 'copilot'
 
 
 @dataclass

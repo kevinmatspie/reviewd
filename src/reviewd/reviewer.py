@@ -367,6 +367,24 @@ REVIEW_SCHEMA: dict = {
 }
 
 
+class CLIAuthError(RuntimeError):
+    pass
+
+
+_AUTH_ERROR_PATTERN = re.compile(
+    r'(?i)(not authenticated|authentication failed|unauthorized|\b401\b|please log ?in|no copilot access)'
+)
+
+READ_ONLY_TOOLS = ('view', 'rg', 'glob')
+
+_COPILOT_STRIPPED_ENV = (
+    'GH_TOKEN',
+    'GITHUB_TOKEN',
+    'BB_WORKSPACE_TOKEN',
+    'CLAUDE_CODE_OAUTH_TOKEN',
+    'ANTHROPIC_API_KEY',
+)
+
 CLI_DEFAULTS: dict[CLI, list[str]] = {
     CLI.CLAUDE: [
         'claude',
@@ -380,20 +398,49 @@ CLI_DEFAULTS: dict[CLI, list[str]] = {
         'high',
     ],
     CLI.GEMINI: ['gemini', '--approval-mode', 'yolo', '-e', 'none'],
-    CLI.CODEX: ['codex', 'exec', '--sandbox', 'workspace-write'],
+    CLI.CODEX: ['codex', 'exec', '--sandbox', 'read-only'],
+    CLI.COPILOT: [
+        'copilot',
+        '-s',
+        '--no-ask-user',
+        '--no-color',
+        '--sandbox',
+        '--disallow-temp-dir',
+        '--disable-builtin-mcps',
+        '--no-custom-instructions',
+        '--secret-env-vars=COPILOT_GITHUB_TOKEN',
+        '--deny-tool=write',
+        f'--available-tools={",".join(READ_ONLY_TOOLS)}',
+    ],
 }
 
 _CLI_PROMPT_MODE: dict[CLI, str] = {
     CLI.CLAUDE: 'flag',
     CLI.GEMINI: 'flag',
     CLI.CODEX: 'stdin',
+    CLI.COPILOT: 'pipe',
 }
 
 _CLI_NOT_FOUND_HINTS: dict[CLI, str] = {
     CLI.CLAUDE: 'Install it first: https://github.com/anthropics/claude-code',
     CLI.GEMINI: 'Make sure it is installed and on your PATH.',
     CLI.CODEX: 'Install with: npm install -g @openai/codex',
+    CLI.COPILOT: 'Make sure GitHub Copilot CLI is installed and on your PATH, and COPILOT_GITHUB_TOKEN is set.',
 }
+
+_ADD_DIR_FLAGS: dict[CLI, str] = {
+    CLI.CLAUDE: '--add-dir',
+    CLI.COPILOT: '--add-dir',
+}
+
+
+def context_dir_args(cli: CLI, dirs: list[str]) -> list[str]:
+    if not dirs:
+        return []
+    flag = _ADD_DIR_FLAGS.get(cli)
+    if flag is None:
+        raise ValueError(f'{cli.value} does not support context directories')
+    return [arg for d in dirs for arg in (flag, d)]
 
 
 def _build_cli_command(
@@ -418,6 +465,8 @@ def _build_cli_command(
     prompt_mode = _CLI_PROMPT_MODE[cli]
     if prompt_mode == 'stdin':
         return [*base, *model_args, *extra, '-'], prompt_text
+    if prompt_mode == 'pipe':
+        return [*base, *model_args, *extra], prompt_text
     return [*base, *model_args, *extra, '-p', prompt_text], None
 
 
@@ -429,6 +478,7 @@ def invoke_cli(
     model: str | None = None,
     cli_args: list[str] | None = None,
     cli_defaults: dict[CLI, list[str]] | None = None,
+    output_schema: dict | None = None,
 ) -> str:
     with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
         f.write(prompt)
@@ -444,7 +494,7 @@ def invoke_cli(
         if cli == CLI.CODEX:
             with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as sf:
                 schema_file = sf.name
-            Path(schema_file).write_text(json.dumps(REVIEW_SCHEMA))
+            Path(schema_file).write_text(json.dumps(output_schema or REVIEW_SCHEMA))
             with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as of:
                 output_file = of.name
             cmd = [*cmd[:-1], '--output-schema', schema_file, '-o', output_file, cmd[-1]]
@@ -457,6 +507,9 @@ def invoke_cli(
         logger.debug('Prompt:\n%s', prompt)
         env = {**os.environ}
         env.pop('CLAUDECODE', None)
+        if cli == CLI.COPILOT:
+            for name in _COPILOT_STRIPPED_ENV:
+                env.pop(name, None)
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -474,12 +527,10 @@ def invoke_cli(
             hint = _CLI_NOT_FOUND_HINTS.get(cli, 'Make sure it is installed and on your PATH.')
             raise RuntimeError(f'"{cli.value}" CLI not found. {hint}') from e
 
-        if stdin_input and proc.stdin:
-            proc.stdin.write(stdin_input)
-            proc.stdin.close()
-            proc.stdin = None
-
         stderr_lines: list[str] = []
+        stdout_parts: list[str] = []
+        stdin_pipe = proc.stdin
+        proc.stdin = None
 
         def _stream_stderr():
             for line in proc.stderr or []:
@@ -487,30 +538,51 @@ def invoke_cli(
                 stderr_lines.append(line)
                 logger.debug('[%s] %s', cli.value, line)
 
-        stderr_thread = threading.Thread(target=_stream_stderr, daemon=True)
-        stderr_thread.start()
+        def _read_stdout():
+            if proc.stdout:
+                stdout_parts.append(proc.stdout.read())
+
+        def _write_stdin():
+            with contextlib.suppress(OSError):
+                stdin_pipe.write(stdin_input)
+            with contextlib.suppress(OSError):
+                stdin_pipe.close()
+
+        threads = [
+            threading.Thread(target=_stream_stderr, daemon=True),
+            threading.Thread(target=_read_stdout, daemon=True),
+        ]
+        if stdin_input and stdin_pipe:
+            threads.append(threading.Thread(target=_write_stdin, daemon=True))
+        for thread in threads:
+            thread.start()
 
         try:
-            stdout = proc.stdout.read() if proc.stdout else ''
             proc.wait(timeout=timeout)
         except (subprocess.TimeoutExpired, KeyboardInterrupt, SystemExit):
-            proc.terminate()
+            with contextlib.suppress(OSError):
+                os.killpg(proc.pid, signal.SIGTERM)
             try:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                proc.kill()
+                with contextlib.suppress(OSError):
+                    os.killpg(proc.pid, signal.SIGKILL)
                 proc.wait()
             raise
         finally:
             with _active_procs_lock:
                 _active_procs.discard(proc)
-            stderr_thread.join(timeout=5)
+            for thread in threads:
+                thread.join(timeout=5)
 
+        stdout = ''.join(stdout_parts)
         stderr = '\n'.join(stderr_lines)
         if proc.returncode != 0:
             logger.error('%s stderr: %s', cli.value, stderr)
             if stdout.strip():
                 logger.error('%s stdout: %s', cli.value, stdout[:500])
+            if _AUTH_ERROR_PATTERN.search(stderr) or _AUTH_ERROR_PATTERN.search(stdout):
+                raise CLIAuthError(f'{cli.value} authentication failed (check COPILOT_GITHUB_TOKEN / login): {stderr}')
             raise RuntimeError(f'{cli.value} exited with code {proc.returncode}: {stderr}')
 
         if output_file and Path(output_file).exists():

@@ -383,7 +383,7 @@ github:
 #   # or: my-workspace: me@example.com:ATATT3x... # user token
 
 # ─── AI CLI ───────────────────────────────────────────────────────────
-cli: claude                           # claude, gemini, or codex
+cli: claude                           # claude, gemini, codex, or copilot
 # model: claude-sonnet-4-5-20250514
 # cli_args: []
 # cli_defaults: {}  # override built-in CLI flags, see config.example.yaml
@@ -574,7 +574,7 @@ def _run_wizard_inner():
     _section('AI CLI')
     cli = questionary.select(
         'Which AI CLI?',
-        choices=['claude', 'gemini', 'codex'],
+        choices=['claude', 'gemini', 'codex', 'copilot'],
         default='claude',
         style=STYLE,
         instruction='(↑↓ move, enter select)',
