@@ -511,6 +511,8 @@ def invoke_cli(
         if cli == CLI.COPILOT:
             for name in _COPILOT_STRIPPED_ENV:
                 env.pop(name, None)
+            if not any(arg.startswith('--available-tools') for arg in cmd):
+                logger.warning('copilot command has no --available-tools; it is NOT read-only (check cli_defaults)')
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -519,6 +521,7 @@ def invoke_cli(
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                errors='replace',
                 env=env,
                 start_new_session=True,
             )
@@ -583,7 +586,7 @@ def invoke_cli(
             if stdout.strip():
                 logger.error('%s stdout: %s', cli.value, stdout[:500])
             if _AUTH_ERROR_PATTERN.search(stderr) or _AUTH_ERROR_PATTERN.search(stdout):
-                raise CLIAuthError(f'{cli.value} authentication failed (check COPILOT_GITHUB_TOKEN / login): {stderr}')
+                raise CLIAuthError(f'{cli.value} authentication failed (check its token or login): {stderr}')
             raise RuntimeError(f'{cli.value} exited with code {proc.returncode}: {stderr}')
 
         if output_file and Path(output_file).exists():

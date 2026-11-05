@@ -54,10 +54,15 @@ def prepare_context(repo: ContextRepo, pr: PRInfo) -> ContextCheckout:
 
     target = _worktree_dir(repo, pr)
     with _locks[repo.path]:
-        fetch = _git(['fetch', 'origin', repo.ref], repo.path, timeout=120)
-        if fetch.returncode != 0:
+        try:
+            fetch = _git(['fetch', 'origin', repo.ref], repo.path, timeout=120)
+        except subprocess.TimeoutExpired:
             checkout.stale = True
-            logger.warning('Fetch failed for context repo %s: %s', repo.name, fetch.stderr.strip())
+            logger.warning('Fetch timed out for context repo %s', repo.name)
+        else:
+            if fetch.returncode != 0:
+                checkout.stale = True
+                logger.warning('Fetch failed for context repo %s: %s', repo.name, fetch.stderr.strip())
 
         rev = _git(['rev-parse', '--verify', f'origin/{repo.ref}^{{commit}}'], repo.path)
         if rev.returncode != 0:

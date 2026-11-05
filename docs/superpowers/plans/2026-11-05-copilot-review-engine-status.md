@@ -1,0 +1,143 @@
+# Status: Copilot Review Engine, Phases 0–6 (Mac mini, 2026-11-05)
+
+Phases 0–6 are done on `feat/copilot-review-engine`, and the branch is pushed. Phase 7 (evaluation and rollout) needs Kevin. Nothing touched the live daemon, `main`, PyPI, or any real PR.
+
+## Before starting
+
+- **Checkout:** I worked in `~kevinm/repos/git/reviewd`, not a fresh `reviewd-dev` clone. Its uv tool receipt shows it is `kevinm`'s editable install (a stale v0.6.3), not `mobiletest`'s live clone. Kevin's uncommitted doc edits were also here.
+- **Live daemon:** Not verified. No `reviewd` process was visible, and I couldn't read `mobiletest`'s plist or logs (permission denied, no sudo). It may be down. I did not touch it.
+- **Merged `main`:** Local `main` at `904e268` is merged into the branch: watch_paths, fork-safe head checkout, repo-level skip_severities, json-repair, the revised legacy prompt, and Claude `--effort high`. **`main` itself is not pushed:** `904e268` exists only on the mini's local `main` and in this branch.
+- **Mistaken commit:** `fbb94fb` accidentally committed the untracked `docs/superpowers/plans/2026-06-11-github-app-auth.md` (`git add docs`). It is untracked again in `bd692fb` and still on disk. It contains no secrets, but it remains in the pushed branch history. Removing it from history would need a force-push, so that's your call.
+
+## Phase 0 spike results
+
+Full detail is in the spec, "Spike results".
+
+**The first flag set failed the read-only check:**
+
+- The allowlisted `git grep -O'<cmd>'` ran arbitrary commands, and `curl` through it fetched example.com **with `--sandbox` on**.
+- `cat ~/.ssh/known_hosts` was approved by Copilot's tool layer, and only the sandbox stopped it.
+- A user-level `~/.copilot` hook ran despite the flags.
+
+I stopped. **You chose option A: no shell for Copilot.**
+
+**Option A's flags passed:** `--sandbox --disallow-temp-dir --disable-builtin-mcps --no-custom-instructions --secret-env-vars=COPILOT_GITHUB_TOKEN --deny-tool=write --available-tools=view,rg,glob`, with the prompt on stdin.
+
+- **Tools available:** only `view`, `rg`, and `glob`, and no `canary` MCP server.
+- **Blocked:** outside reads, `~/.ssh`, `/etc`, and `$TMPDIR`. The transcript shows these as failed tool calls.
+
+**Other answers:**
+
+- **Model IDs:** `gpt-6.1-sol`, `gpt-6-sol` (the default), `gpt-6-luna`, `gpt-6-astra`, and `gpt-5.6-*`, plus others. `--reasoning-effort none…max` is supported.
+- **Output:** With `-s`, stdout is the final answer only. Copilot sometimes returns unfenced JSON, which `extract_json`'s raw-object fallback handles.
+- **Usage file:** JSON with `totalPremiumRequestCost` and per-model calls and tokens. It still lands with `--disallow-temp-dir` on.
+- **Auth:** Not captured. A bogus `COPILOT_GITHUB_TOKEN` still authenticated, even with an empty `COPILOT_HOME`, because `kevinm`'s stored login (likely in the keychain) wins. **The token type, its expiry, and the auth-failure text are deferred to Phase 7**, under `mobiletest` with no stored login.
+- **Q7 (`--sandbox` for `mobiletest`):** Deferred to Phase 7. Note that `mobiletest` is in the `admin` group.
+- **Cost:** The spike used 7 Copilot sessions. Counting the `invoke_cli` check and the 2-pass smoke test, this session used about 12 premium requests on your seat (including 2 symlink tests after the code review).
+
+## Tests and lint
+
+- **Tests:** 62 at the original base, then 87 after merging `main`, now **124 passed**. The 37 new tests are the plan's approved tests. One was rewritten for option A: `test_copilot_command_is_read_only` now asserts the no-shell flags and the stdin prompt.
+- **Lint:** All new files pass `ruff check` and `ruff format --check`. The repo-wide lint baseline is unchanged: the same two E501 errors (`commenter.py:535`, `providers/github.py:188`) and the same three files `ruff format` would rewrite. For `commenter.py`, I confirmed the formatter's suggestions are all pre-existing.
+
+## Smoke test (Task 13)
+
+**Setup:**
+
+- **Target:** `scan main --engine pipeline` on a scratch clone of reviewd (`~/reviewd-smoke/repo`), on a branch with one planted regression. `scope.file_in_scope` drops the `/` boundary check.
+- **Context:** A second reviewd clone stood in for `mobile-services`.
+- **Model:** `gpt-6-sol` for both passes.
+
+**Results:**
+
+- **Run time:** 36 s total, with find ≈ 21 s and verify ≈ 15 s.
+- **Usage:** **2 premium requests per review** (1 per pass). The find pass used 5 model calls and about 85k input tokens; the verify pass used 6 calls and about 61k.
+- **Plumbing:** The context worktree was created, passed via `--add-dir`, and removed. The summary shows `**Context:** smoke-context@main (904e268)`.
+- **Review quality:** It caught the planted regression. It traced the effect to `_collect_eligible_prs` and noticed the existing boundary test.
+
+Output tail:
+
+```
+### 🟡 Suggestion (1)
+
+- **Sibling directories trigger out-of-scope reviews** — `src/reviewd/scope.py` (line 11)
+  When watch_paths contains `Postman` and a PR changes only `PostmanX/thing.json`, this returns true. `_collect_eligible_prs` then queues a PR whose pathspec-filtered diff contains no watched changes; the review can still be posted and marked complete. The existing boundary test explicitly requires this path not to match.
+
+**Bottom line:** Restore directory-boundary matching so sibling paths cannot trigger out-of-scope reviews.
+
+**Context:** smoke-context@main (904e268)
+
+*Automated review by gpt-6-sol in 36s. Findings are AI-generated and may not be accurate.*
+```
+
+The smoke test is a plumbing check on a toy change, not evidence of quality on the mobile apps. That's what the Phase 7 evaluation is for.
+
+## Deviations from the plan, and why
+
+1. **Option A (no shell)** replaces the `READ_ONLY_GIT` shell allowlist, per the spike and your decision.
+   - **Copilot runner:** `READ_ONLY_TOOLS = ('view', 'rg', 'glob')` and a `'pipe'` stdin prompt mode, which avoids the 1 MB `ARG_MAX` limit and keeps PR content out of `ps`.
+   - **Change context from Python:** A new `collect_change` builds the commit list and the full diff, resolving the merge-base once. The diff is capped at 200k characters, with `--stat` plus a "read these files" note past the cap.
+   - **Prompts:** Both prompts embed the change in a fence longer than any backtick run in it.
+2. **`watch_paths` is honored by the pipeline,** as a pathspec on every git call. The plan predates `watch_paths`.
+3. **Shared prompt text was lifted from `904e268`'s legacy prompt,** not the plan's older copy. The legacy prompt output is byte-identical before and after the refactor, verified in 13 configurations.
+4. **`invoke_cli` writes stdin on its own thread,** started after the readers, so a large prompt can't deadlock or block past the timeout.
+5. **The Copilot subprocess environment drops tokens.** It removes `GH_TOKEN`/`GITHUB_TOKEN`, which would otherwise authenticate Copilot as the polling PAT when `COPILOT_GITHUB_TOKEN` is unset. It also removes `BB_WORKSPACE_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, and `ANTHROPIC_API_KEY`.
+6. **Small additions:**
+   - Invalid `engine` values and context refs starting with `-` fail at config load.
+   - The backoff check also runs in `_collect_eligible_prs`, so backed-off PRs don't cost a `list_pr_files` call each poll.
+   - `skip_severities` also filters edge cases.
+   - Copilot usage is logged as one compact line.
+7. **The plan's "one real legacy `reviewd pr --dry-run`" became a direct `invoke_cli` call** against the real Claude and Copilot CLIs. Both returned parsed JSON, which exercised the new threading. A full `reviewd pr` would have needed a configured repo and real PR access.
+
+## Security and reliability review
+
+I reviewed the branch myself as I went, then had an independent review agent read every changed source file. It reviewed the files as they stand, not the branch diff, because it had no shell.
+
+**Fixed:**
+
+- **Empty-message failures recorded as success.** An exception whose `str()` is empty (e.g. `httpx.ReadTimeout`) was recorded as `success`, so it was never retried or backed off. The daemon now records `str(e) or type(e).__name__`. This affects both engines.
+- **Context worktree leaks.** If a second context checkout raised, or a fetch hung past its 120 s timeout, the earlier worktrees leaked. Contexts are now built inside the `try`. A fetch timeout means "stale context", and each cleanup is guarded individually.
+- **Paths with spaces.** Git appends a tab to `+++ b/<path>` when the path contains a space, so every finding in such a file was demoted from inline. Fixed and checked against a real diff.
+- **Reader-thread decode errors.** Undecodable output bytes could kill a reader thread, and the CLI would then block until the timeout. `Popen` now uses `errors='replace'`. This affects both engines.
+- **Auth message.** The `CLIAuthError` message no longer names `COPILOT_GITHUB_TOKEN` for every CLI.
+- **Missing read-only flags.** If a `cli_defaults.copilot` override drops `--available-tools`, a warning is logged that the run is not read-only.
+
+**Checked, not an issue:**
+
+- **Symlink escape from the PR worktree:** Tested live with option A's flags; blocked by `view`, `rg`, and `glob`. See the spec.
+- **Injection and parsing:** Git option injection (refs, base refs, `--no-ext-diff`, the sanitized slug), prompt fencing, and `.format` brace safety are fine.
+- **Logic:** The backoff indexing and give-up count, the shutdown path, the schema migration, the process-group kill, the stdin writer, and verdict merging are correct.
+- **Legacy path:** Unchanged apart from the stated differences.
+
+**Open, for you to decide:**
+
+- **Environment filtering.** The Copilot environment is still built by removing a fixed list of token names. Any other secret variable in the daemon's environment (e.g. a differently named Bitbucket token) passes through. Copilot has no shell, so the model can't read it, but hooks and the CLI itself can. Passing only allowed variables is stronger, but it could break Copilot's keychain auth or the MDM TLS setup. I'd decide this during the Phase 7 setup as `mobiletest`, once the exact variables Copilot needs are known.
+- **Verify failure discards the find pass.** Two verify failures throw away a completed find pass (the spec's "post nothing" rule). Under backoff, one bad commit can cost up to 4 find passes plus up to 8 verify attempts in premium requests. An option is to cache the find output per commit.
+- **Broad auth-error matching.** `_AUTH_ERROR_PATTERN` also matches stdout on a non-zero exit, so review text containing "401" or "unauthorized" could be misread as an auth error, which skips the verify retry. Tighten it once Phase 7 captures the real failure text.
+- **`scan` ignores `watch_paths`** (pre-existing). The pipeline supports it, but `scan` doesn't pass it, and untracked new files don't appear in a local scan's diff.
+
+## Behavior changes that affect `legacy` repos (mobile-tests, QAdevelopment)
+
+- **Backoff:** Failed reviews back off 5/15/60 minutes and give up after the 4th failure on the same commit. A new commit, or `reviewd pr --force`, retries.
+- **Timeout:** `invoke_cli`'s timeout now actually fires, and on timeout it kills the whole process group. That's 600 s by default for legacy.
+- **Codex:** The default sandbox is now `read-only`. Neither SPIE repo uses Codex.
+
+## Phase 7: what Kevin needs to do
+
+1. **Copilot for `mobiletest`:**
+   - Install Copilot CLI and put `COPILOT_GITHUB_TOKEN` in `~mobiletest/.config/reviewd/secrets.env`. Confirm `run.sh` exports it.
+   - Create a **dedicated `COPILOT_HOME`** for the daemon, with `disableAllHooks: true`.
+   - Re-run the spike as `mobiletest` to settle the token type and expiry, the auth-failure text (needed for `_AUTH_ERROR_PATTERN`), and whether `--sandbox` works there. Scripts: `~kevinm/reviewd-spike-scripts/`; use `run3.sh` for option A.
+2. **mobile-services context:** Create a dedicated clone with a **read-only deploy key**, not a dev checkout. Confirm `git fetch origin main` works non-interactively as `mobiletest`.
+3. **Config:** Add `context_repos.mobile-services` and the `review:` block with the model IDs. `gpt-6-sol` worked in the smoke test; `gpt-6.1-sol` is newer. Then set `engine: pipeline` and `context: [mobile-services]` on both app repos.
+4. **Disable auto-approve** on both app repos for the first week.
+5. **Pick 6–8 evaluation PRs** (Task 14), then run `reviewd pr <repo> <id> --dry-run --force --engine legacy|pipeline` for each.
+6. **Deploy:** The live daemon runs `mobiletest`'s editable clone. It needs this branch merged or checked out there and a kickstart. There are no new dependencies beyond `904e268`'s `json-repair`; if that isn't installed in the tool env yet, it needs `uv tool install --reinstall --editable`.
+
+## Not code, but flagged
+
+- **Exposed runner credentials:** The Bitbucket Pipelines runners on this machine pass OAuth client secrets and a repo access token on their command lines, readable by any local user via `ps`. Flagging only; I did nothing.
+
+## Leftovers to clean up
+
+- `~/reviewd-spike-1793920169/` (spike transcripts and usage files), `~/reviewd-spike-scripts/`, and `~/reviewd-smoke/` (smoke clones, config, logs, and a scratch `state.db`). Keep them until Phase 7 is done, then `rm -rf` all three.

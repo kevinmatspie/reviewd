@@ -59,7 +59,7 @@ def parse_changed_lines(diff_text: str) -> dict[str, set[int]]:
     current = None
     for line in diff_text.splitlines():
         if line.startswith('+++ '):
-            path = line[4:]
+            path = line[4:].split('\t', 1)[0]
             current = None if path == '/dev/null' else path.removeprefix('b/')
             if current is not None:
                 changed.setdefault(current, set())
@@ -322,8 +322,10 @@ def run_pipeline(
     commits, diff = collect_change(cwd, base, include_worktree=pr.is_local, watch_paths=watch_paths)
     change = {'commits': commits, 'diff': diff, 'scope_paths': watch_paths}
 
-    contexts = [prepare_context(repo, pr) for repo in pipeline.context]
+    contexts = []
     try:
+        for repo in pipeline.context:
+            contexts.append(prepare_context(repo, pr))
         add_dirs = [c.worktree for c in contexts if c.worktree]
         find_prompt = build_find_prompt(pr, project_config, contexts, **change)
         find_data = _run_pass(find_prompt, cwd, pipeline.find, add_dirs, cli_defaults, FIND_SCHEMA)
@@ -368,4 +370,7 @@ def run_pipeline(
         )
     finally:
         for c in contexts:
-            cleanup_context(c)
+            try:
+                cleanup_context(c)
+            except (OSError, subprocess.SubprocessError) as e:
+                logger.warning('Could not clean up context worktree %s: %s', c.worktree, e)

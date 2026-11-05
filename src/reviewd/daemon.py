@@ -251,7 +251,11 @@ def _process_pr(
         logger.log(25, 'Finished review of PR #%d (%d findings)', pr.pr_id, len(result.findings))
     except Exception as e:
         attempts = state_db.finish_review(
-            pr.repo_slug, pr.pr_id, pr.source_commit, error=str(e), count_failure=not _shutdown_event.is_set()
+            pr.repo_slug,
+            pr.pr_id,
+            pr.source_commit,
+            error=str(e) or type(e).__name__,
+            count_failure=not _shutdown_event.is_set(),
         )
         logger.exception('Failed to review PR #%d', pr.pr_id)
         if attempts >= MAX_FAILURES:

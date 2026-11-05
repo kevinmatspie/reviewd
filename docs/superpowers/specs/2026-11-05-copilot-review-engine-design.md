@@ -197,6 +197,7 @@ Repos without `engine: pipeline` use the global default, which is `legacy`. Cont
 - **Blocked:** `view` of the outside file, of `~/.ssh/known_hosts`, of `/etc/hosts`, and of a `$TMPDIR` file, plus `rg` on `~/.ssh`. All appear as failed tool calls in the transcript.
 - **Stdin works:** `copilot -s` accepts the prompt on stdin with no `-p`. That avoids the 1 MB `ARG_MAX` limit for large diffs and keeps PR content out of `ps`.
 - **Context-repo config:** `--add-dir` loads the context directory's `.github/skills` and `.github/agents` as trusted configuration. That's acceptable for `mobile-services` at `main`, which is internal and reviewed.
+- **Symlink escape (tested after the code review):** A PR could commit symlinks pointing outside the worktree, so `link-outside.txt` → a file outside and `link-dir` → the parent directory were planted in the PR repo. `view` on either was blocked ("Outside the sandbox's readable paths"), meaning the path check resolves symlinks. `rg` and `glob` on the link paths were denied, and a recursive `rg` doesn't follow links ("No matches found"). No symlink stripping is needed with these flags.
 - **Hooks still run under A,** because the CLI executes them, not the model. The daemon needs a dedicated `COPILOT_HOME` with `disableAllHooks: true` (a rollout step).
 
 Option A in the implementation:
