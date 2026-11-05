@@ -25,7 +25,7 @@
 - One test: `uv run pytest tests/test_x.py::test_name -v`
 - Lint: `uv run ruff check src tests && uv run ruff format --check src tests`
 
-**Lint baseline:** `main` at `9c1d3e7` already fails lint. There are two E501 errors (`commenter.py:535`, `providers/github.py:188`), and `ruff format --check` would reformat `commenter.py`, `providers/github.py`, and `reviewer.py`. **Do not fix or reformat pre-existing code**, because it buries the real diff. The bar is no *new* lint errors: run `uv run ruff check` and `uv run ruff format --check` on the files you create, and keep edits to existing files in their surrounding style. Test baseline: 62 passed on `main` at `9c1d3e7` (laptop, 2026-11-05).
+**Lint baseline:** `main` at `9c1d3e7` already fails lint. There are two E501 errors (`commenter.py:535`, `providers/github.py:188`), and `ruff format --check` would reformat `commenter.py`, `providers/github.py`, and `reviewer.py`. **Do not fix or reformat pre-existing code**, because it buries the real diff. The bar is no *new* lint errors: run `uv run ruff check` and `uv run ruff format --check` on the files you create, and keep edits to existing files in their surrounding style. Test baseline: 62 passed on `main` at `9c1d3e7` (laptop, 2026-11-05). **Updated on the Mac mini, 2026-11-05:** after merging `main` at `904e268` (watch_paths, fork-safe head checkout, repo-level skip_severities, json-repair, revised legacy prompt, Claude `--effort high`) into this branch, the baseline is **87 passed**, with the same lint baseline (the same two E501 errors and the same three files `ruff format` would rewrite).
 
 ---
 
