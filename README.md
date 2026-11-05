@@ -188,7 +188,19 @@ repos:
     workspace: your-workspace
     cli: gemini                   # or "codex"
     model: gemini-2.5-pro
+
+  - name: qa-postman              # watch one tool inside a monorepo
+    repo_slug: owner/QAmonorepo
+    path: ~/repos/QAmonorepo
+    provider: github              # watch_paths currently GitHub-only
+    watch_paths:                  # folders to scope reviews to
+      - Postman/
+    skip_severities: [nitpick]    # drop these severities without a .reviewd.yaml
 ```
+
+**`watch_paths`** (optional, GitHub-only) restricts reviewd to one or more folders inside a repo. PRs that touch none of the listed folders are skipped (via a cheap "list PR files" API call, before any clone), and for PRs that do, the model only ever sees the diff *under* those folders — the git commands are pathspec-filtered in code, not left to the model to decide. Paths are directory prefixes (e.g. `Postman/` matches everything beneath it). Omit `watch_paths` to review the whole repo as usual.
+
+**`skip_severities`** (optional) drops findings of the given severities (`critical`, `suggestion`, `nitpick`, `good`) — the operator-side equivalent of the per-repo `.reviewd.yaml` setting of the same name, for when you don't control the target repo. Values from both places are unioned. Invalid names are rejected at load time (so a typo fails loudly rather than silently doing nothing).
 
 ### Per-project (`.reviewd.yaml` in repo root)
 
@@ -294,6 +306,8 @@ reviewd status <repo>                         # review history
 - `--mcp-config '{"mcpServers":{}}' --strict-mcp-config` — disables all MCP servers, preventing external tool access
 - `CLAUDECODE` env var is unset — prevents nested Claude Code sessions
 
+Claude CLI also runs with `--effort high`. At the CLI default, newer models (e.g. Sonnet 5.5) skim the diff in seconds and skip reading changed files and related code. Override with `cli_args: ['--effort', 'xhigh']` (the last `--effort` wins) or via `cli_defaults`.
+
 **Gemini CLI** runs with `--approval-mode yolo` (no confirmation prompts). This means Gemini can execute commands and modify files in the worktree during review. Mitigated by:
 - `-e none` — disables all extensions (no web access, no additional tools)
 - Inherently less sandboxed than Claude since there's no tool-level write blocking
@@ -308,6 +322,17 @@ reviewd status <repo>                         # review history
 - Per-project config (`.reviewd.yaml`) is read from the main repo, not the worktree — PR authors can't inject instructions via config changes
 - `test_commands` come only from the repo owner's config, not from PR content
 - Prompt injection attempts in code under review are flagged as security findings
+
+## Troubleshooting: "Network unavailable" behind a corporate proxy
+
+If reviewd logs `Network unavailable` but the network is fine, suspect **TLS inspection** — a corporate MITM proxy (Zscaler, Netskope, etc.) re-signs HTTPS with a private CA, and the cert-verification failure surfaces as `httpx.ConnectError`, which the retry wrapper reports as a network outage. Confirm by checking who issued the cert:
+
+```bash
+openssl s_client -connect api.github.com:443 -servername api.github.com </dev/null 2>/dev/null | openssl x509 -noout -issuer
+# a corporate CA (not the site's real issuer) = inspection is intercepting you
+```
+
+The right fix is to have your proxy team stop inspecting the API/git endpoints, or to trust the corporate CA via your **OS trust store** (which stays current as the CA rotates). If you must set a client-side CA bundle instead, make it **additive** — your language/tool's public roots (e.g. `certifi`) *plus* the corporate CA — never corporate-only, or it breaks the moment inspection is turned off.
 
 ## Roadmap
 

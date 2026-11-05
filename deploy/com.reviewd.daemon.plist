@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template. install.sh substitutes __HOME__ with the target account's home
+  directory and installs this to ~/Library/LaunchAgents/<label>.plist.
+  This is a LaunchAgent (gui/<uid> domain), not a LaunchDaemon — it requires
+  the target account to be GUI-logged-in.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.reviewd.daemon</string>
+
+    <!-- Wrapper script handles PATH + secrets loading. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>__HOME__/.config/reviewd/run.sh</string>
+    </array>
+
+    <!-- Start when the user logs in. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart if it dies, but only if exit was non-zero AND network is up.
+         Prevents thrash loops when offline (e.g. closing the laptop lid). -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>NetworkState</key>
+        <true/>
+    </dict>
+
+    <!-- Don't restart faster than once per minute. -->
+    <key>ThrottleInterval</key>
+    <integer>60</integer>
+
+    <!-- Lower priority than interactive work. macOS scheduler will
+         deprioritize it under load. -->
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>WorkingDirectory</key>
+    <string>__HOME__</string>
+
+    <!-- Logs. The directory must exist before launchd loads this plist
+         (install.sh creates it). launchd writes captured stdout/stderr here;
+         reviewd's own info logs go to log_file in config.yaml via its
+         in-process RotatingFileHandler.
+         These MUST be separate files: launchd opens its FD once and never
+         reopens, so if it shared reviewd.log, every in-process rotation
+         would strand launchd's FD on the rotated file. -->
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/reviewd/launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/reviewd/launchd.log</string>
+
+    <!-- launchd's default soft FD limit is 256. Bump it as a safety net so
+         a future leak (or just a busy poll cycle) can't exhaust pipes. -->
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>4096</integer>
+    </dict>
+</dict>
+</plist>

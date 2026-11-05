@@ -14,6 +14,9 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
+from json_repair import repair_json
+
+from reviewd import scope
 from reviewd.models import (
     CLI,
     Finding,
@@ -89,6 +92,51 @@ def cleanup_stale_worktrees(repo_path: str):
             logger.info('Force-cleaned worktree: %s', entry.name)
 
 
+def _commit_present(repo_path: str, commit: str) -> bool:
+    if not commit:
+        return False
+    result = subprocess.run(
+        ['git', 'cat-file', '-e', f'{commit}^{{commit}}'],
+        cwd=repo_path,
+        capture_output=True,
+        env=_GIT_ENV,
+        timeout=10,
+    )
+    return result.returncode == 0
+
+
+def _ensure_head_commit(repo_path: str, pr: PRInfo) -> bool:
+    # Make pr.source_commit available locally. Fetching origin/<source_branch> is
+    # unreliable for forks: when the fork's branch name collides with one on
+    # origin (e.g. fork:main -> base:main), origin/<branch> resolves to the wrong
+    # commit. Fetch best-effort by branch, then fall back to the PR head ref until
+    # the head SHA is present. Callers must hold _repo_locks[repo_path].
+    if _commit_present(repo_path, pr.source_commit):
+        return True
+    subprocess.run(
+        ['git', 'fetch', 'origin', pr.source_branch],
+        cwd=repo_path,
+        capture_output=True,
+        env=_GIT_ENV,
+        timeout=120,
+    )
+    if _commit_present(repo_path, pr.source_commit):
+        return True
+    # GitHub: refs/pull/<id>/head, BitBucket: refs/pull-requests/<id>/from
+    for pr_ref in (f'pull/{pr.pr_id}/head', f'pull-requests/{pr.pr_id}/from'):
+        subprocess.run(
+            ['git', 'fetch', 'origin', pr_ref],
+            cwd=repo_path,
+            capture_output=True,
+            env=_GIT_ENV,
+            timeout=120,
+        )
+        if _commit_present(repo_path, pr.source_commit):
+            logger.info('Fetched PR #%d head via ref: %s', pr.pr_id, pr_ref)
+            break
+    return _commit_present(repo_path, pr.source_commit)
+
+
 def create_worktree(repo_path: str, pr: PRInfo) -> str:
     worktree_dir = Path(repo_path) / '.reviewd-worktrees' / f'pr-{pr.pr_id}'
     worktree_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -97,56 +145,29 @@ def create_worktree(repo_path: str, pr: PRInfo) -> str:
         cleanup_worktree(repo_path, pr)
 
     with _repo_locks[repo_path]:
-        # Try fetching branch by name first; fall back to PR ref or commit hash
-        # (source branch may live on a fork or have been deleted after merge)
-        pr_ref_fetched = False
-        fetch_result = subprocess.run(
-            ['git', 'fetch', 'origin', pr.source_branch, pr.destination_branch],
+        # The destination branch is required for the reviewer's merge-base.
+        dest_result = subprocess.run(
+            ['git', 'fetch', 'origin', pr.destination_branch],
             cwd=repo_path,
             capture_output=True,
             env=_GIT_ENV,
             timeout=120,
         )
-        if fetch_result.returncode != 0:
-            logger.warning('Source branch fetch failed: %s', fetch_result.stderr.decode().strip())
-            dest_result = subprocess.run(
-                ['git', 'fetch', 'origin', pr.destination_branch],
-                cwd=repo_path,
-                capture_output=True,
-                env=_GIT_ENV,
-                timeout=120,
+        if dest_result.returncode != 0:
+            raise RuntimeError(
+                f'Cannot fetch destination branch {pr.destination_branch}: '
+                f'{dest_result.stderr.decode().strip()}'
             )
-            if dest_result.returncode != 0:
-                raise RuntimeError(
-                    f'Cannot fetch destination branch {pr.destination_branch}: '
-                    f'{dest_result.stderr.decode().strip()}'
-                )
-            # Try PR refs (works for forks and deleted branches)
-            # GitHub: refs/pull/<id>/head, BitBucket: refs/pull-requests/<id>/from
-            for pr_ref in [f'pull/{pr.pr_id}/head', f'pull-requests/{pr.pr_id}/from']:
-                ref_result = subprocess.run(
-                    ['git', 'fetch', 'origin', pr_ref],
-                    cwd=repo_path,
-                    capture_output=True,
-                    env=_GIT_ENV,
-                    timeout=120,
-                )
-                if ref_result.returncode == 0:
-                    logger.info('Fetched PR via ref: %s', pr_ref)
-                    pr_ref_fetched = True
-                    break
 
-        # Use branch ref if available, then FETCH_HEAD (from PR ref), then commit hash
-        checkout_ref = f'origin/{pr.source_branch}'
-        ref_check = subprocess.run(
-            ['git', 'rev-parse', '--verify', checkout_ref],
-            cwd=repo_path,
-            capture_output=True,
-            env=_GIT_ENV,
-            timeout=10,
-        )
-        if ref_check.returncode != 0:
-            checkout_ref = 'FETCH_HEAD' if pr_ref_fetched else pr.source_commit
+        # Check out the exact head commit rather than origin/<source_branch>,
+        # which is unreliable for forks. See _ensure_head_commit.
+        if not _ensure_head_commit(repo_path, pr):
+            raise RuntimeError(
+                f'Cannot obtain head commit {pr.source_commit[:8]} for PR #{pr.pr_id} '
+                '(fork with deleted branch, or commit not fetchable)'
+            )
+
+        checkout_ref = pr.source_commit
 
         wt_result = subprocess.run(
             [
@@ -260,7 +281,7 @@ def get_base_branch(repo_path: str | Path) -> str:
     return 'main'
 
 
-def get_diff_lines(repo_path: str, pr: PRInfo) -> int:
+def get_diff_lines(repo_path: str, pr: PRInfo, watch_paths: list[str] | None = None) -> int:
     if pr.is_local:
         # Diff the working tree (committed + uncommitted) against the merge-base
         # with the base ref, so the count matches what the reviewer sees.
@@ -277,16 +298,24 @@ def get_diff_lines(repo_path: str, pr: PRInfo) -> int:
         diff_base = merge_base.stdout.strip()
     else:
         with _repo_locks[repo_path]:
-            subprocess.run(
-                ['git', 'fetch', 'origin', pr.source_branch, pr.destination_branch],
+            dest = subprocess.run(
+                ['git', 'fetch', 'origin', pr.destination_branch],
                 cwd=repo_path,
                 capture_output=True,
                 env=_GIT_ENV,
                 timeout=120,
             )
-        diff_base = f'origin/{pr.destination_branch}...origin/{pr.source_branch}'
+            # Diff against the head SHA, not origin/<source_branch>: for a fork PR
+            # whose branch name collides with origin (fork:main -> base:main), the
+            # branch form yields origin/main...origin/main — an empty diff — and the
+            # PR is wrongly skipped as too small.
+            has_head = _ensure_head_commit(repo_path, pr)
+        if dest.returncode != 0 or not has_head:
+            logger.warning('Could not prepare refs for PR #%d diff size, proceeding anyway', pr.pr_id)
+            return -1
+        diff_base = f'origin/{pr.destination_branch}...{pr.source_commit}'
     result = subprocess.run(
-        ['git', 'diff', '--shortstat', diff_base],
+        ['git', 'diff', '--shortstat', diff_base, *scope.pathspec_args(watch_paths or [])],
         cwd=repo_path,
         capture_output=True,
         text=True,
@@ -347,6 +376,8 @@ CLI_DEFAULTS: dict[CLI, list[str]] = {
         '--mcp-config',
         '{"mcpServers":{}}',
         '--strict-mcp-config',
+        '--effort',
+        'high',
     ],
     CLI.GEMINI: ['gemini', '--approval-mode', 'yolo', '-e', 'none'],
     CLI.CODEX: ['codex', 'exec', '--sandbox', 'workspace-write'],
@@ -541,6 +572,17 @@ def extract_json(output: str) -> dict:
             logger.warning('Fixed trailing commas in AI JSON output')
             return json.loads(fixed, strict=False)
         except json.JSONDecodeError as e:
+            # Last resort: json-repair handles what the strict parsers can't —
+            # unescaped quotes inside string values, missing delimiters, stray
+            # backslashes. Kept last because it coerces aggressively; only reach
+            # for it once the strict passes have genuinely failed.
+            try:
+                repaired = json.loads(repair_json(raw), strict=False)
+            except (json.JSONDecodeError, ValueError):
+                repaired = None
+            if isinstance(repaired, dict) and repaired:
+                logger.warning('Recovered AI JSON via json-repair')
+                return repaired
             # Dump the full AI output so the review can be salvaged manually
             # rather than throwing away the entire (paid-for) call.
             dump_path = Path(tempfile.gettempdir()) / f'reviewd-failed-{int(time.time())}.txt'
@@ -591,11 +633,12 @@ def review_pr(
     model: str | None = None,
     cli_args: list[str] | None = None,
     cli_defaults: dict[CLI, list[str]] | None = None,
+    watch_paths: list[str] | None = None,
 ) -> ReviewResult:
     worktree_path = None if pr.is_local else create_worktree(repo_path, pr)
     review_cwd = worktree_path or repo_path
     try:
-        prompt = build_review_prompt(pr, project_config)
+        prompt = build_review_prompt(pr, project_config, watch_paths=watch_paths)
         t0 = time.monotonic()
         output = invoke_cli(
             prompt,

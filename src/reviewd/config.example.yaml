@@ -57,6 +57,8 @@
 #     - --mcp-config
 #     - '{"mcpServers":{}}'
 #     - --strict-mcp-config
+#     - --effort
+#     - high
 #   gemini:
 #     - gemini
 #     - --approval-mode

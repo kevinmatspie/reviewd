@@ -205,6 +205,10 @@ class GithubProvider(GitProvider):
             result[f['filename']] = _parse_added_lines(patch)
         return result
 
+    def list_pr_files(self, repo_slug: str, pr_id: int) -> list[str]:
+        files = self._paginate(f'/repos/{repo_slug}/pulls/{pr_id}/files', {'per_page': '100'})
+        return [f['filename'] for f in files]
+
 
 def _parse_next_link(link_header: str) -> str | None:
     for part in link_header.split(','):

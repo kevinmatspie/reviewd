@@ -25,6 +25,33 @@ def test_malformed_json_raises():
         extract_json(output)
 
 
+def test_unescaped_inner_quotes_recovered():
+    """Findings that quote code with unescaped inner double-quotes (the PR-351
+    failure) are recovered via json-repair instead of blowing up the review."""
+    output = (
+        '```json\n'
+        '{\n'
+        '  "overview": "ok",\n'
+        '  "findings": [\n'
+        '    {\n'
+        '      "severity": "warning",\n'
+        '      "title": "Assert the path",\n'
+        '      "file": "x.ts",\n'
+        '      "line": 12,\n'
+        '      "issue": "The call expect(page).toHaveURL("/euclid") should assert the path",\n'
+        '      "fix": "wrap it"\n'
+        '    }\n'
+        '  ],\n'
+        '  "summary": "done"\n'
+        '}\n'
+        '```'
+    )
+    data = extract_json(output)
+    result = parse_review_result(data)
+    assert len(result.findings) == 1
+    assert 'toHaveURL' in result.findings[0].issue
+
+
 def test_parse_unknown_severity_defaults():
     """Unknown severity string → defaults to suggestion."""
     data = {
