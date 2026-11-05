@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 
 from reviewd.models import Finding, ReviewResult, Severity
 
@@ -64,3 +65,24 @@ AI_JSON_OUTPUT = json.dumps(
         'approve_reason': 'Critical security issue found',
     }
 )
+
+
+def git(cwd, *args):
+    return subprocess.run(
+        [
+            'git',
+            '-c',
+            'user.name=Test',
+            '-c',
+            'user.email=test@example.com',
+            '-c',
+            'init.defaultBranch=main',
+            '-c',
+            'commit.gpgsign=false',
+            *args,
+        ],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()

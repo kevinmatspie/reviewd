@@ -666,26 +666,26 @@ def extract_json(output: str) -> dict:
             raise ValueError(f'Malformed JSON in AI output: {e}') from e
 
 
+def parse_finding(f: dict) -> Finding:
+    try:
+        severity = Severity(f.get('severity', 'suggestion'))
+    except ValueError:
+        logger.warning('Unknown severity %r in finding, defaulting to suggestion', f.get('severity'))
+        severity = Severity.SUGGESTION
+    return Finding(
+        severity=severity,
+        category=f.get('category', 'General'),
+        title=f.get('title', ''),
+        file=f.get('file', ''),
+        line=f.get('line'),
+        end_line=f.get('end_line'),
+        issue=f.get('issue', ''),
+        fix=f.get('fix'),
+    )
+
+
 def parse_review_result(data: dict) -> ReviewResult:
-    findings = []
-    for f in data.get('findings', []):
-        try:
-            severity = Severity(f.get('severity', 'suggestion'))
-        except ValueError:
-            logger.warning('Unknown severity %r in finding, defaulting to suggestion', f.get('severity'))
-            severity = Severity.SUGGESTION
-        findings.append(
-            Finding(
-                severity=severity,
-                category=f.get('category', 'General'),
-                title=f.get('title', ''),
-                file=f.get('file', ''),
-                line=f.get('line'),
-                end_line=f.get('end_line'),
-                issue=f.get('issue', ''),
-                fix=f.get('fix'),
-            )
-        )
+    findings = [parse_finding(f) for f in data.get('findings', [])]
     return ReviewResult(
         overview=data.get('overview', ''),
         findings=findings,
