@@ -376,6 +376,8 @@ CLI_DEFAULTS: dict[CLI, list[str]] = {
         '--mcp-config',
         '{"mcpServers":{}}',
         '--strict-mcp-config',
+        '--effort',
+        'high',
     ],
     CLI.GEMINI: ['gemini', '--approval-mode', 'yolo', '-e', 'none'],
     CLI.CODEX: ['codex', 'exec', '--sandbox', 'workspace-write'],

@@ -306,6 +306,8 @@ reviewd status <repo>                         # review history
 - `--mcp-config '{"mcpServers":{}}' --strict-mcp-config` — disables all MCP servers, preventing external tool access
 - `CLAUDECODE` env var is unset — prevents nested Claude Code sessions
 
+Claude CLI also runs with `--effort high`. At the CLI default, newer models (e.g. Sonnet 5.5) skim the diff in seconds and skip reading changed files and related code. Override with `cli_args: ['--effort', 'xhigh']` (the last `--effort` wins) or via `cli_defaults`.
+
 **Gemini CLI** runs with `--approval-mode yolo` (no confirmation prompts). This means Gemini can execute commands and modify files in the worktree during review. Mitigated by:
 - `-e none` — disables all extensions (no web access, no additional tools)
 - Inherently less sandboxed than Claude since there's no tool-level write blocking
