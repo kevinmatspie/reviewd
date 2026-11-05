@@ -87,7 +87,7 @@ If the flags, the `--allow-tool` pattern syntax, or the auth-error text differ f
 
 ### Task 1: Add `CLI.COPILOT`, `--add-dir` support, per-call output schema, auth error, Codex read-only, and fix the `invoke_cli` timeout
 
-> **BLOCKED by the Phase 0 spike (2026-11-05).** See the spec's "Spike results" section. The allowlisted `git grep -O` runs arbitrary commands and reached the network with `--sandbox` on. Don't implement the flags below until Kevin chooses option A (no shell tool) or option B (a trimmed git allowlist). `--sandbox` and `--disallow-temp-dir` are needed in either case.
+> **Updated for option A (Kevin, 2026-11-05).** The Phase 0 spike showed that an allowlisted shell is not read-only: `git grep -O` ran arbitrary commands and reached the network. Copilot therefore gets **no shell**. It runs with `--available-tools=view,rg,glob`, `--sandbox`, and `--disallow-temp-dir`, and receives the prompt on stdin. Python supplies the commit list and the diff (Tasks 8 and 9). This replaces the earlier `READ_ONLY_GIT` shell allowlist, and Kevin's choice of A is the approval for the rewritten `test_copilot_command_is_read_only`.
 
 **Files:**
 - Modify: `src/reviewd/models.py` (the `CLI` enum)
@@ -106,12 +106,13 @@ from reviewd.reviewer import CLI_DEFAULTS, _build_cli_command, context_dir_args
 
 READ_ONLY_FLAGS = [
     '--sandbox',
+    '--disallow-temp-dir',
     '--disable-builtin-mcps',
     '--no-custom-instructions',
     '--deny-tool=write',
     '--secret-env-vars=COPILOT_GITHUB_TOKEN',
+    '--available-tools=view,rg,glob',
 ]
-ALLOWED_GIT = {'log', 'show', 'diff', 'merge-base', 'grep', 'blame', 'rev-parse', 'ls-files'}
 
 
 def test_copilot_command_is_read_only(tmp_path):
@@ -119,19 +120,17 @@ def test_copilot_command_is_read_only(tmp_path):
     prompt_file.write_text('review this')
     cmd, stdin_input = _build_cli_command(CLI.COPILOT, str(prompt_file), model='gpt-x', extra_args=['--add-dir', '/ctx'])
 
-    assert stdin_input is None
+    assert stdin_input == 'review this'
     assert cmd[0] == 'copilot'
+    assert '-p' not in cmd and '-' not in cmd
     for flag in READ_ONLY_FLAGS:
         assert flag in cmd
-    assert '--allow-all-tools' not in cmd
-    assert '--allow-all' not in cmd
+    for arg in cmd:
+        assert not arg.startswith('--allow-tool')
+        assert not arg.startswith('--allow-all')
     assert '--yolo' not in cmd
-    allowed = [arg.removeprefix('--allow-tool=') for arg in cmd if arg.startswith('--allow-tool=')]
-    assert allowed
-    for tool in allowed:
-        assert tool.startswith('shell(git ') and tool.endswith(')')
-        assert tool[len('shell(git ') : -1] in ALLOWED_GIT
-    assert cmd[-2:] == ['-p', 'review this']
+    tools = [arg.removeprefix('--available-tools=') for arg in cmd if arg.startswith('--available-tools=')]
+    assert tools == ['view,rg,glob']
     assert cmd[cmd.index('--model') + 1] == 'gpt-x'
     assert cmd[cmd.index('--add-dir') + 1] == '/ctx'
 
@@ -208,21 +207,22 @@ Replace the Codex entry and add Copilot in `CLI_DEFAULTS`:
         '--no-ask-user',
         '--no-color',
         '--sandbox',
+        '--disallow-temp-dir',
         '--disable-builtin-mcps',
         '--no-custom-instructions',
         '--secret-env-vars=COPILOT_GITHUB_TOKEN',
         '--deny-tool=write',
-        *[f'--allow-tool=shell(git {sub})' for sub in READ_ONLY_GIT],
+        f'--available-tools={",".join(READ_ONLY_TOOLS)}',
     ],
 ```
 
-Define this above `CLI_DEFAULTS`. It is an explicit allowlist, because `shell(git:*)` would also permit `checkout`, `reset`, `stash`, `clean`, `commit`, and `push`:
+Define this above `CLI_DEFAULTS`. These are Copilot's built-in read-only tools (read a file, search, list files). There is deliberately no shell tool:
 
 ```python
-READ_ONLY_GIT = ('log', 'show', 'diff', 'merge-base', 'grep', 'blame', 'rev-parse', 'ls-files')
+READ_ONLY_TOOLS = ('view', 'rg', 'glob')
 ```
 
-Add `CLI.COPILOT: 'flag'` to `_CLI_PROMPT_MODE`, and `CLI.COPILOT: 'Make sure GitHub Copilot CLI is installed and on your PATH, and COPILOT_GITHUB_TOKEN is set.'` to `_CLI_NOT_FOUND_HINTS`.
+Add `CLI.COPILOT: 'pipe'` to `_CLI_PROMPT_MODE`. `'pipe'` means the prompt goes on stdin with no `-` marker; `'stdin'` stays Codex-only, and Codex's `cmd[:-1]` surgery only runs for Codex. In `invoke_cli`, drop `GH_TOKEN`, `GITHUB_TOKEN`, `BB_WORKSPACE_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN` and `ANTHROPIC_API_KEY` from the Copilot subprocess environment. `GH_TOKEN`/`GITHUB_TOKEN` would otherwise authenticate Copilot as the polling PAT when `COPILOT_GITHUB_TOKEN` is missing. Also add, and `CLI.COPILOT: 'Make sure GitHub Copilot CLI is installed and on your PATH, and COPILOT_GITHUB_TOKEN is set.'` to `_CLI_NOT_FOUND_HINTS`.
 
 Add below `_CLI_NOT_FOUND_HINTS`:
 
@@ -253,7 +253,7 @@ In `invoke_cli`:
                 raise CLIAuthError(f'{cli.value} authentication failed (check COPILOT_GITHUB_TOKEN / login): {stderr}')
 ```
 
-**Fix the timeout.** Read stdout on a thread, the same way stderr already is, so `proc.wait(timeout=...)` actually runs while the CLI is alive. On timeout, kill the whole process group: the subprocess is a session leader (`start_new_session=True`), and Copilot spawns children that can hold the pipes open. In `invoke_cli`, replace the block from `stderr_lines: list[str] = []` through `stderr = '\n'.join(stderr_lines)` with:
+**Fix the timeout.** Read stdout on a thread, the same way stderr already is, so `proc.wait(timeout=...)` actually runs while the CLI is alive. Write stdin on its own thread too, started after the readers, and suppress `BrokenPipeError`. A large prompt written before the readers start can deadlock, or block past the timeout. On timeout, kill the whole process group: the subprocess is a session leader (`start_new_session=True`), and Copilot spawns children that can hold the pipes open. In `invoke_cli`, replace the block from `stderr_lines: list[str] = []` through `stderr = '\n'.join(stderr_lines)` with:
 
 ```python
         stderr_lines: list[str] = []
@@ -1260,6 +1260,8 @@ Expected: 4 passed.
 
 ### Task 8: Find and verify prompts
 
+> **Option A changes.** The model has no shell. Steps 2–3 of the find template (running `git log`, `git merge-base`, and `git diff`) and the verify template's "If you need the diff" line become embedded `## Commits` and `## Diff` sections that Python supplies. Tool wording stays generic ("your file-reading, search and file-listing tools; there is no shell"), because a pass may use another CLI. `build_find_prompt` and `build_verify_prompt` take keyword arguments `commits`, `diff` and `scope_paths`, and the approved positional calls still work. Lift the shared severity and approve text from `main`'s current `build_review_prompt` (as revised in `904e268`), not from the code blocks below.
+
 **Files:**
 - Modify: `src/reviewd/prompt.py`
 - Test: `tests/test_pipeline_prompt.py` (create). The existing `tests/test_prompt.py` must still pass unchanged; it guards `legacy`.
@@ -1583,6 +1585,11 @@ Expected: All pass.
 ## Phase 5: Orchestration and wiring
 
 ### Task 9: `run_pipeline` with verify retry, and `review_pr` dispatch
+
+> **Option A changes.**
+> - **Change context:** `run_pipeline` builds it in Python with a new `collect_change`. It resolves the merge-base once and gathers the commit list plus a normal-context diff, capped at `MAX_PROMPT_DIFF_CHARS`. When the diff is over the cap, it embeds `--stat` and tells the model to read those files. It passes the result to both prompts. Anchoring keeps its own `-U0` diff.
+> - **`watch_paths`:** `review_pr` passes `watch_paths` to `run_pipeline`, which applies `scope.pathspec_args` to every git call. `run_pipeline` and `changed_lines` take it as a keyword argument defaulting to none.
+> - **Empty diff:** An empty diff logs a warning.
 
 **Files:**
 - Modify: `src/reviewd/pipeline.py`

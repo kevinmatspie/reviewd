@@ -134,8 +134,8 @@ Repos without `engine: pipeline` use the global default, which is `legacy`. Cont
 
 ## Copilot runner
 
-- **Command:** `copilot -p <prompt> -s --no-ask-user --model <m> --add-dir <ctx>...`
-- **Tool permissions:** Deny writes (`--deny-tool='write'`) and allow read-only shell (`--allow-tool='shell(git:*)'` plus whatever read tools are required). The exact flags are verified against `copilot --help` during implementation. Do not construct them from memory.
+- **Command:** `copilot -s --no-ask-user --model <m> --add-dir <ctx>...`, with the prompt on stdin.
+- **Tool permissions:** No shell (option A, below). `--available-tools=view,rg,glob`, `--deny-tool=write`, `--sandbox`, and `--disallow-temp-dir`. The spike verified these flags.
 - **Auth:** Via `COPILOT_GITHUB_TOKEN`. Auth failures are detected and logged as auth errors, not as a generic exit code.
 - **Usage:** `--usage-output-file` records premium-request usage per pass. It is logged per review.
 - **Output format:** Confirm with a real dry run whether `-s` text or `--output-format json` gives the cleanest final message for `extract_json`.
@@ -189,7 +189,22 @@ Repos without `engine: pipeline` use the global default, which is `legacy`. Cont
    - `--reasoning-effort none|minimal|low|medium|high|xhigh|max` exists.
 10. **Q7 (`--sandbox` for `mobiletest`):** Deferred to Phase 7. The question's premise is wrong: `mobiletest` is in the `admin` group (gid 80).
 
-**Options for Kevin (recommendation first):**
+**Decision (Kevin, 2026-11-05): option A.** It was verified with a follow-up run:
+
+- **Flags:** `--sandbox --disallow-temp-dir --disable-builtin-mcps --no-custom-instructions --secret-env-vars=COPILOT_GITHUB_TOKEN --deny-tool=write --available-tools=view,rg,glob`. The prompt goes in on stdin.
+- **Tools:** The transcript shows the agent had only `view`, `rg`, `glob` (and a parallel-call wrapper). There was no shell, write, or fetch tool, and no `canary` MCP server, which resolves the `.mcp.json` question.
+- **Allowed:** `view` in the cwd and the `--add-dir`, `rg` across both, and `glob` listing.
+- **Blocked:** `view` of the outside file, of `~/.ssh/known_hosts`, of `/etc/hosts`, and of a `$TMPDIR` file, plus `rg` on `~/.ssh`. All appear as failed tool calls in the transcript.
+- **Stdin works:** `copilot -s` accepts the prompt on stdin with no `-p`. That avoids the 1 MB `ARG_MAX` limit for large diffs and keeps PR content out of `ps`.
+- **Context-repo config:** `--add-dir` loads the context directory's `.github/skills` and `.github/agents` as trusted configuration. That's acceptable for `mobile-services` at `main`, which is internal and reviewed.
+- **Hooks still run under A,** because the CLI executes them, not the model. The daemon needs a dedicated `COPILOT_HOME` with `disableAllHooks: true` (a rollout step).
+
+Option A in the implementation:
+
+- **Python supplies the change:** It resolves the merge-base once. It embeds the commit list (`git log --reverse`) and the full diff (normal context, size-capped, with `--stat` plus a "read these files" note when over the cap) in both the find and the verify prompts. Anchoring uses a separate `-U0` diff.
+- **`watch_paths` is honored:** Python owns every git call, so a pathspec applies to the log, the prompt diff, and the anchoring diff.
+
+**Options presented to Kevin (recommendation first):**
 
 - **A (recommended): No shell tool.**
   - **What:** Python already computes the diff for anchoring, so it also computes `git log --reverse` and the full diff and puts both in the find and verify prompts. Copilot then runs with `--available-tools` limited to the built-in read tools. The session transcripts show the built-in tool names: `view` and `rg` (read and search), `bash` (shell), and `apply_patch` (writes). So option A would be `--available-tools=view,rg`, plus a glob/list tool if one exists. Keep `--sandbox`, `--disallow-temp-dir`, `--no-custom-instructions`, and `--disable-builtin-mcps`.
@@ -249,6 +264,7 @@ Run each one with `reviewd pr --dry-run --force` on the old engine and the new e
 
 1. **Prerequisites:**
    - Copilot CLI installed for the `mobiletest` account, with Kevin's token in `secrets.env`.
+   - A dedicated `COPILOT_HOME` for the daemon, with `disableAllHooks: true` in its settings, so user-level hooks, plugins, and instructions never load.
    - A `mobile-services` clone with a **read-only deploy key**. Deploy keys don't expire, which avoids repeating the June PAT-rotation outage.
    - The model list for the seat confirmed, and the TBDs filled in.
 2. **Go live:** Set `engine: pipeline` on iOS and Android together, with auto-approve **off** for the first week. `mobile-tests` and `QAdevelopment` stay on `legacy` and are not affected.
