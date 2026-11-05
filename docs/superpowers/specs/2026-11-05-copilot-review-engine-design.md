@@ -155,7 +155,9 @@ Repos without `engine: pipeline` use the global default, which is `legacy`. Cont
 - **`--sandbox`:** Accepted, but undocumented in `copilot --help`. `copilot help sandbox` describes it. On macOS it uses Seatbelt (`sandbox-exec`) and applies to shell commands, not to built-in file edits.
 - **`--disallow-temp-dir`:** Needed. Without it, reads under `$TMPDIR` are allowed. That's where other reviews' prompt files and `reviewd-failed-*.txt` dumps live.
 - **Permission patterns:** `--allow-tool='shell(git log)'` works per subcommand. `git -c core.pager=… log` did *not* match it and was denied.
-- **Auto-approval beyond the allowlist:** Copilot auto-approves some commands we didn't allow. `git status` (including in an `&&` chain) and `cat` both ran. `cat ~/.ssh/known_hosts` was approved at the tool layer and was stopped only by the sandbox. **So the tool allowlist is not the read-only boundary. The sandbox is.**
+- **Auto-approval beyond the allowlist:** Copilot approved some commands that aren't on the allowlist. `git status` ran, both alone and in an `&&` chain.
+  - **Path handling is inconsistent:** `cat ~/.ssh/known_hosts` (a `~` path) was approved at the tool layer and stopped only by the sandbox. `git log; cat /Users/…/outside.txt` and `ls /Users/…/<spike dir>` (absolute paths outside the allowed directories) were denied at the tool layer. The tool layer's path check may not expand `~`.
+  - **Conclusion:** Either way, the tool allowlist is not the read-only boundary. The sandbox is.
 
 **Answers:**
 
@@ -190,7 +192,7 @@ Repos without `engine: pipeline` use the global default, which is `legacy`. Cont
 **Options for Kevin (recommendation first):**
 
 - **A (recommended): No shell tool.**
-  - **What:** Python already computes the diff for anchoring, so it also computes `git log --reverse` and the full diff and puts both in the find and verify prompts. Copilot then runs with `--available-tools` limited to the built-in read tools (view / `rg` / glob; exact names to confirm). Keep `--sandbox`, `--disallow-temp-dir`, `--no-custom-instructions`, and `--disable-builtin-mcps`.
+  - **What:** Python already computes the diff for anchoring, so it also computes `git log --reverse` and the full diff and puts both in the find and verify prompts. Copilot then runs with `--available-tools` limited to the built-in read tools. The session transcripts show the built-in tool names: `view` and `rg` (read and search), `bash` (shell), and `apply_patch` (writes). So option A would be `--available-tools=view,rg`, plus a glob/list tool if one exists. Keep `--sandbox`, `--disallow-temp-dir`, `--no-custom-instructions`, and `--disable-builtin-mcps`.
   - **Benefit:** This removes the whole command-execution class instead of chasing git options one at a time.
   - **Cost:**
     - Bigger prompts.

@@ -87,6 +87,8 @@ If the flags, the `--allow-tool` pattern syntax, or the auth-error text differ f
 
 ### Task 1: Add `CLI.COPILOT`, `--add-dir` support, per-call output schema, auth error, Codex read-only, and fix the `invoke_cli` timeout
 
+> **BLOCKED by the Phase 0 spike (2026-11-05).** See the spec's "Spike results" section. The allowlisted `git grep -O` runs arbitrary commands and reached the network with `--sandbox` on. Don't implement the flags below until Kevin chooses option A (no shell tool) or option B (a trimmed git allowlist). `--sandbox` and `--disallow-temp-dir` are needed in either case.
+
 **Files:**
 - Modify: `src/reviewd/models.py` (the `CLI` enum)
 - Modify: `src/reviewd/reviewer.py` (`CLI_DEFAULTS`, `_CLI_PROMPT_MODE`, `_CLI_NOT_FOUND_HINTS`, `invoke_cli`, new `context_dir_args`, `CLIAuthError`)
