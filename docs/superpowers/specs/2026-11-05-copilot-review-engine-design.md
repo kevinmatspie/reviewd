@@ -229,9 +229,10 @@ Option A in the implementation:
 
 **Backoff (fixes an existing gap):** Today `state.has_review` only counts `success`/`in_progress`, so an errored review is retried on every 60s poll forever. With two premium-request passes per attempt, that would burn quota continuously. New behavior:
 
-- Back off 5, 15, then 60 minutes.
-- Stop after 3 failures on the same commit.
-- A new commit starts fresh.
+- Back off 5, 15, then 60 minutes after the 1st, 2nd, and 3rd failures.
+- Give up after the 4th consecutive failure on the same commit (`reviewd pr --force` still retries).
+- A new commit starts fresh. A review aborted by daemon shutdown is not counted.
+- This applies to both engines, so `legacy` repos stop retrying failed reviews on every poll too.
 
 ## Testing
 

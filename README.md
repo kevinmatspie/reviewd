@@ -148,6 +148,7 @@ Check API -> State Check (SQLite) -> Fetch & Worktree -> AI Review (Claude/Gemin
 3. Creates a git worktree, runs configured test commands
 4. Invokes the AI CLI with a structured prompt and JSON output schema
 5. Posts inline comments + summary comment, tracks state in SQLite
+6. A failed review backs off 5, 15, then 60 minutes and gives up after the 4th failure on the same commit (a new commit starts fresh; `reviewd pr --force` retries)
 
 ## Configuration
 
@@ -164,7 +165,7 @@ bitbucket:
   your-workspace: you@example.com:${BB_API_TOKEN}
   other-workspace: other@example.com:${OTHER_BB_TOKEN}
 
-cli: claude                    # or "gemini" or "codex"
+cli: claude                    # or "gemini", "codex", or "copilot"
 # model: claude-sonnet-4-5-20250514
 
 # review_title: "review'd by {cli}"
@@ -270,6 +271,38 @@ also set `auto_approve.enabled: true` (with optional gates like `max_diff_lines`
 The two flags are intentionally orthogonal: `formal_review` controls whether
 reviews are formal; `auto_approve` controls whether reviewd is allowed to approve.
 
+### Pipeline engine (find → verify)
+
+`engine: pipeline` (globally or per repo) replaces the single review prompt with two passes:
+
+1. **Find:** a thorough pass that sweeps for regressions in callers of the changed code and, when context repos are configured, checks app/API contracts (routes, parameter types, nullability, JSON casing) against them.
+2. **Verify:** an adversarial pass that opens each candidate's cited evidence and confirms it, downgrades it to an edge case, or drops it. It cannot add new issues. Dropped candidates are logged ("Verifier dropped …"), never posted.
+
+Findings whose line isn't in the diff are posted in the summary instead of inline. Edge cases and the context repo commits used appear in the summary. If the verify pass fails twice, nothing is posted and the failure backoff applies.
+
+```yaml
+engine: legacy                 # global default
+context_repos:
+  mobile-services:
+    path: ~/repos/spie-dev/mobile-services   # dedicated clone; reviewd adds .reviewd-worktrees/ inside it
+    ref: main
+    description: "Api endpoints, Shared/Data DTOs, Task import jobs"
+review:
+  find:   { cli: copilot, model: gpt-6-sol, timeout: 900 }
+  verify: { enabled: true, cli: copilot, model: gpt-6-sol, timeout: 600 }
+repos:
+  - name: my-app
+    engine: pipeline
+    context: [mobile-services]
+    # ...
+```
+
+- **Runner:** GitHub Copilot CLI (`cli: copilot`), authenticated with `COPILOT_GITHUB_TOKEN`. reviewd removes `GH_TOKEN`/`GITHUB_TOKEN` (and other provider/AI tokens) from Copilot's environment so it can't fall back to the polling token.
+- **Read-only:** Copilot gets no shell. It runs with `--available-tools=view,rg,glob`, `--sandbox`, `--disallow-temp-dir`, and `--deny-tool=write`, and reviewd puts the commit list and diff (capped at 200k characters) in the prompt. An allowlisted shell is not read-only: `git grep -O` can run arbitrary commands.
+- **Isolation:** give the daemon a dedicated `COPILOT_HOME` with `disableAllHooks: true`, so user-level hooks, plugins, and instructions never load.
+- **Usage:** each pass logs Copilot's premium-request usage (`copilot usage: …`).
+- **Overrides:** `reviewd pr` and `reviewd scan` accept `--engine legacy|pipeline`. `--cli` applies to the legacy engine only.
+
 ## CLI Reference
 
 ```bash
@@ -284,6 +317,7 @@ reviewd watch --concurrency 8                 # override max concurrent reviews
 reviewd pr <repo> <id>                        # one-shot review (reviews drafts too)
 reviewd pr <repo> <id> --force                # re-review (bypasses already-reviewed/cooldown/skip)
 reviewd scan [base_branch]                    # review local + uncommitted changes (dry-run, posts nothing)
+reviewd pr <repo> <id> --dry-run --engine pipeline   # try the find -> verify engine on one PR
 reviewd status <repo>                         # review history
 ```
 

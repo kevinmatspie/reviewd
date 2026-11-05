@@ -94,10 +94,13 @@ def _parse_context_repos(data: dict) -> dict[str, ContextRepo]:
     for name, entry in data.items():
         if not isinstance(entry, dict) or 'path' not in entry:
             raise SystemExit(f'Context repo "{name}" is missing required field "path"')
+        ref = str(entry.get('ref', 'main'))
+        if not ref or ref.startswith('-'):
+            raise SystemExit(f'Context repo "{name}" has invalid ref "{ref}"')
         repos[str(name)] = ContextRepo(
             name=str(name),
             path=str(Path(entry['path']).expanduser()),
-            ref=str(entry.get('ref', 'main')),
+            ref=ref,
             description=str(entry.get('description', '')),
         )
     return repos

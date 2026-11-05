@@ -20,7 +20,9 @@ Local AI code review daemon for GitHub/BitBucket PRs. See README.md for full doc
 | `src/reviewd/cli.py` | Click CLI: `ls`, `watch`, `pr`, `status` commands |
 | `src/reviewd/daemon.py` | Poll loop, boot summary, status line, orchestration, signal handling |
 | `src/reviewd/reviewer.py` | Worktree lifecycle + AI CLI invocation (Popen) + JSON extraction |
-| `src/reviewd/prompt.py` | Built-in review prompt template + builder |
+| `src/reviewd/pipeline.py` | Pipeline engine: change collection, find/verify orchestration, verdict merge, diff anchoring |
+| `src/reviewd/context.py` | Read-only context repo worktrees (e.g. mobile-services) for the pipeline engine |
+| `src/reviewd/prompt.py` | Legacy review template + pipeline find/verify templates and builders |
 | `src/reviewd/commenter.py` | Format findings as markdown, post via provider, delete old comments by ID |
 | `src/reviewd/config.py` | YAML + `${ENV_VAR}` loading, global + per-project merge, provider factory |
 | `src/reviewd/state.py` | SQLite: reviews + posted_comments (with get/delete by repo+PR) |
@@ -52,6 +54,8 @@ rm -rf dist && uv build && uv publish
 - Codex CLI outputs raw JSON (no markdown fences) — extract_json falls back to raw JSON object parsing
 - Inline suggestions are single-line only (TODO: multi-line support)
 - AI may hallucinate line numbers — prompt instructs to double-check but not guaranteed
+- The `legacy` engine (single prompt) is temporary: once `pipeline` is trusted on the mobile apps, move the QA repos to it and delete `REVIEW_TEMPLATE` and the legacy path (see spec Open items)
+- Copilot (pipeline engine) must never get a shell tool: an allowlisted `git` is not read-only (`git grep -O` runs commands). Keep `--available-tools=view,rg,glob`
 - Behind a TLS-inspection proxy, cert-verify failures surface as `httpx.ConnectError` and log as "Network unavailable" (misleading — network is fine). Check the cert issuer; fix at the proxy or via the OS trust store, not a corporate-only CA bundle. See README troubleshooting section
 
 ## In-flight work (branch `feat/copilot-review-engine`)

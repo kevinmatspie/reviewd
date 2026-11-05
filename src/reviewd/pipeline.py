@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -233,6 +234,24 @@ VERIFY_SCHEMA: dict = {
 }
 
 
+def _usage_summary(raw: str) -> str:
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return raw[:1000]
+    if not isinstance(data, dict):
+        return raw[:1000]
+    model = data.get('currentModel')
+    metrics = (data.get('modelMetrics') or {}).get(model) or {}
+    usage = metrics.get('usage') or {}
+    requests = metrics.get('requests') or {}
+    return (
+        f'premium_requests={data.get("totalPremiumRequestCost")} model={model} '
+        f'model_calls={requests.get("count")} input_tokens={usage.get("inputTokens")} '
+        f'output_tokens={usage.get("outputTokens")} api_ms={data.get("totalApiDurationMs")}'
+    )
+
+
 def _run_pass(
     prompt: str,
     cwd: str,
@@ -261,7 +280,7 @@ def _run_pass(
         if usage_file:
             usage = Path(usage_file).read_text().strip()
             if usage:
-                logger.info('%s usage: %s', pass_config.cli.value, usage[:1000])
+                logger.info('%s usage: %s', pass_config.cli.value, _usage_summary(usage))
             else:
                 logger.warning('%s wrote no usage data to %s', pass_config.cli.value, usage_file)
         return extract_json(output)

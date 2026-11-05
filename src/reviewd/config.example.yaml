@@ -32,8 +32,8 @@
 
 # --- AI CLI settings ---
 
-# AI CLI to use: "claude" or "gemini" (default: claude)
-# Can be overridden per repo.
+# AI CLI to use: "claude", "gemini", "codex", or "copilot" (default: claude)
+# Used by the legacy engine. Can be overridden per repo.
 # cli: claude
 
 # Model passed as --model to the CLI. Uses CLI default if omitted.
@@ -69,7 +69,42 @@
 #     - codex
 #     - exec
 #     - --sandbox
-#     - workspace-write
+#     - read-only
+#   copilot:                         # prompt is sent on stdin; no shell tool on purpose
+#     - copilot
+#     - -s
+#     - --no-ask-user
+#     - --no-color
+#     - --sandbox
+#     - --disallow-temp-dir
+#     - --disable-builtin-mcps
+#     - --no-custom-instructions
+#     - --secret-env-vars=COPILOT_GITHUB_TOKEN
+#     - --deny-tool=write
+#     - --available-tools=view,rg,glob
+
+# --- Review engine ---
+
+# "legacy" (default): one prompt, one CLI call (cli/model/cli_args above).
+# "pipeline": a find pass, then a verify pass, with optional read-only context
+# repos (e.g. a backend whose API the app calls). Python supplies the commit
+# list and diff; the model only gets read/search/list tools.
+# Can be overridden per repo with `engine:`.
+# engine: legacy
+
+# Context repos are defined once and referenced by name from a repo's `context:`.
+# Use a dedicated clone (reviewd creates .reviewd-worktrees/ inside it), fetchable
+# non-interactively (e.g. a read-only deploy key).
+# context_repos:
+#   mobile-services:
+#     path: ~/repos/spie-dev/mobile-services
+#     ref: main
+#     description: "Api endpoints, Shared/Data DTOs, Task import jobs"
+
+# Pass settings for the pipeline engine. `args` are extra CLI flags for that pass.
+# review:
+#   find:   { cli: copilot, model: gpt-6-sol, timeout: 900 }
+#   verify: { enabled: true, cli: copilot, model: gpt-6-sol, timeout: 600 }
 
 # --- Polling ---
 
@@ -166,6 +201,8 @@ repos: []
   #   workspace: my-workspace          # must match a key in bitbucket section
   #   # cli: gemini              # override per repo
   #   # model: gemini-2.5-pro    # override per repo
+  #   # engine: pipeline         # find -> verify engine (see "Review engine" above)
+  #   # context: [mobile-services]   # names from context_repos
 
 # --- State ---
 
