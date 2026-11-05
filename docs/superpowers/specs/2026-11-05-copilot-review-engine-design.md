@@ -24,13 +24,21 @@ The current prompt actively suppresses most of this. "ONLY review code in the di
 | Copilot auth | Use Kevin's Copilot seat token for now (`COPILOT_GITHUB_TOKEN` in `secrets.env`). Kevin is investigating a service-account option. |
 | Pass structure | Two passes: **find**, then **verify**. Verify can be toggled off in config (`verify.enabled`). |
 | Context repos | `mobile-services` as read-only context at `ref: main`. The ref is configurable per context repo because syncing branch names with releases is planned. No branch-matching logic for now (YAGNI). |
-| Scope | Bitbucket mobile apps only: `spieconferences-ios` and `spieconferences-android`. The GitHub repos keep GitHub's built-in Copilot review. |
-| Old prompt | `REVIEW_TEMPLATE` is removed and replaced by the find and verify templates. |
+| Engine selection | New `engine: legacy \| pipeline` setting, global default plus per-repo override (same pattern as `cli`/`model`). One daemon, one config, one state DB. No fork, no second install. |
+| Scope | `pipeline` for the Bitbucket mobile apps only: `spieconferences-ios` and `spieconferences-android`. The GitHub repos reviewd already watches (`mobile-tests`, `QAdevelopment`) stay on `legacy` with unchanged behavior. |
+| Old prompt | `REVIEW_TEMPLATE` and today's single-pass flow are kept, untouched, as the `legacy` engine. Temporary: once `pipeline` is proven on the mobile apps, migrate the QA repos and delete `legacy` (see Open items). |
 | Rollout | iOS and Android together. Auto-approve is off on both for the first week. |
 
 ## Architecture
 
-The daemon still calls `review_pr(...)` and gets back a `ReviewResult`. Inside `review_pr`:
+The daemon still calls `review_pr(...)` and gets back a `ReviewResult`. `review_pr` dispatches on the repo's resolved `engine`:
+
+- `legacy`: Today's code path, unchanged: one prompt (`REVIEW_TEMPLATE`), one CLI call, `extract_json`.
+- `pipeline`: The new flow below.
+
+Rolling a repo back is a one-line config change.
+
+The `pipeline` flow:
 
 1. **PR worktree:** Created exactly as it is today.
 2. **Context worktrees (new `context.py`):** For each context repo referenced by the repo config:
@@ -108,16 +116,21 @@ review:
   find:   { cli: copilot, model: TBD, timeout: 900 }
   verify: { enabled: true, cli: copilot, model: TBD, timeout: 600 }
 
+engine: legacy              # global default
+
 repos:
   - name: spieconferences-ios
+    engine: pipeline
     context: [mobile-services]
     # instructions: list iOS fragile areas here
   - name: spieconferences-android
+    engine: pipeline
     context: [mobile-services]
     # instructions: list Android fragile areas here
+  # mobile-tests and QAdevelopment (GitHub): unchanged, inherit engine: legacy
 ```
 
-Context repos are defined once and referenced by name. Model names stay TBD until we confirm what the Copilot seat offers.
+Repos without `engine: pipeline` use the global default, which is `legacy`. Context repos are defined once and referenced by name. Model names stay TBD until we confirm what the Copilot seat offers.
 
 ## Copilot runner
 
@@ -152,7 +165,9 @@ Context repos are defined once and referenced by name. Model names stay TBD unti
 - Copilot command building: read-only flags and `--add-dir` entries are always present. This is a security property.
 - Context fallback (fetch failure, missing clone).
 
-Existing prompt tests (`test_prompt.py`, `test_config_and_prompt.py`) are rewritten for the new templates.
+- Engine dispatch: a repo resolves `engine` from the per-repo override, falling back to the global default, and `legacy` runs the unchanged path.
+
+Existing prompt tests (`test_prompt.py`, `test_config_and_prompt.py`) stay as-is, since they cover `legacy`. New tests cover the find and verify templates.
 
 **Evaluation set (the real test):** 6–8 past mobile PRs with known answers:
 
@@ -173,7 +188,7 @@ Run each one with `reviewd pr --dry-run --force` on the old engine and the new e
    - Copilot CLI installed for the `mobiletest` account, with Kevin's token in `secrets.env`.
    - A `mobile-services` clone with a **read-only deploy key**. Deploy keys don't expire, which avoids repeating the June PAT-rotation outage.
    - The model list for the seat confirmed, and the TBDs filled in.
-2. **Go live:** Enable iOS and Android together with auto-approve **off** for the first week.
+2. **Go live:** Set `engine: pipeline` on iOS and Android together, with auto-approve **off** for the first week. `mobile-tests` and `QAdevelopment` stay on `legacy` and are not affected.
 3. **Monitor:**
    - The reviewd logs (`~mobiletest/Library/Logs/reviewd`).
    - Per-review usage.
@@ -182,6 +197,8 @@ Run each one with `reviewd pr --dry-run --force` on the old engine and the new e
 4. **Tune:** Adjust per-repo `instructions` (fragile areas) and the prompts based on the dropped-findings log and the posted results. Re-enable auto-approve when trusted.
 
 ## Open items
+
+- **Legacy engine removal:** After `pipeline` is trusted on the mobile apps, move `mobile-tests` and `QAdevelopment` to `pipeline` (verify on, probably no context repos), then delete `REVIEW_TEMPLATE`, the legacy path, and the `engine` setting if it is no longer needed.
 
 - **Copilot service account:** Kevin is investigating whether the subscription supports one.
 - **Model choices:** For find and verify, including whether verify should use a different vendor's model from the Copilot picker.
