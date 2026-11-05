@@ -35,6 +35,7 @@ class Finding:
     end_line: int | None
     issue: str
     fix: str | None = None
+    inline: bool = True
 
 
 @dataclass
@@ -53,6 +54,8 @@ class ReviewResult:
     approve: bool = False
     approve_reason: str | None = None
     duration_seconds: float | None = None
+    edge_cases: list[Finding] = field(default_factory=list)
+    context_refs: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -107,6 +110,43 @@ class CLI(enum.StrEnum):
     COPILOT = 'copilot'
 
 
+class Engine(enum.StrEnum):
+    LEGACY = 'legacy'
+    PIPELINE = 'pipeline'
+
+
+@dataclass
+class ContextRepo:
+    name: str
+    path: str
+    ref: str = 'main'
+    description: str = ''
+
+
+@dataclass
+class PassConfig:
+    cli: CLI = CLI.COPILOT
+    model: str | None = None
+    timeout: int = 900
+    enabled: bool = True
+    args: list[str] = field(default_factory=list)
+
+
+@dataclass
+class PipelineConfig:
+    find: PassConfig
+    verify: PassConfig
+    context: list[ContextRepo] = field(default_factory=list)
+
+
+@dataclass
+class Candidate:
+    id: str
+    kind: str
+    finding: Finding
+    evidence: list[str] = field(default_factory=list)
+
+
 @dataclass
 class RepoConfig:
     name: str
@@ -120,6 +160,8 @@ class RepoConfig:
     formal_review: bool | None = None
     watch_paths: list[str] = field(default_factory=list)
     skip_severities: list[str] = field(default_factory=list)
+    engine: Engine | None = None
+    context: list[str] = field(default_factory=list)
 
     @property
     def slug(self) -> str:
@@ -147,3 +189,7 @@ class GlobalConfig:
     review_title: str = "review'd by {cli}"
     footer: str = 'Automated review by {model}{duration}. Findings are AI-generated and may not be accurate.'
     log_file: str | None = None
+    engine: Engine = Engine.LEGACY
+    context_repos: dict[str, ContextRepo] = field(default_factory=dict)
+    review_find: PassConfig = field(default_factory=PassConfig)
+    review_verify: PassConfig = field(default_factory=lambda: PassConfig(timeout=600))

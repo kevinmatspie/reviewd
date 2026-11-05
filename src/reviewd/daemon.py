@@ -22,7 +22,7 @@ from reviewd.commenter import post_review
 from reviewd.config import get_provider, load_project_config
 from reviewd.models import GlobalConfig, PRInfo, ProjectConfig, RepoConfig
 from reviewd.reviewer import DEFAULT_TIMEOUT, cleanup_stale_worktrees, get_diff_lines, review_pr, terminate_all
-from reviewd.state import StateDB
+from reviewd.state import MAX_FAILURES, StateDB
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +180,10 @@ def _process_pr(
         logger.debug('PR #%d@%s already reviewed, skipping', pr.pr_id, pr.source_commit[:8])
         return
 
+    if not force and state_db.in_backoff(pr.repo_slug, pr.pr_id, pr.source_commit):
+        logger.debug('PR #%d@%s in failure backoff, skipping', pr.pr_id, pr.source_commit[:8])
+        return
+
     if not force and project_config.review_cooldown_minutes > 0:
         minutes = state_db.minutes_since_last_review(pr.repo_slug, pr.pr_id)
         if minutes is not None and minutes < project_config.review_cooldown_minutes:
@@ -225,7 +229,7 @@ def _process_pr(
             watch_paths=repo_config.watch_paths,
         )
         if _shutdown_event.is_set():
-            state_db.finish_review(pr.repo_slug, pr.pr_id, pr.source_commit, error='shutdown')
+            state_db.finish_review(pr.repo_slug, pr.pr_id, pr.source_commit, error='shutdown', count_failure=False)
             return
         post_review(
             provider,
@@ -243,8 +247,17 @@ def _process_pr(
         state_db.finish_review(pr.repo_slug, pr.pr_id, pr.source_commit)
         logger.log(25, 'Finished review of PR #%d (%d findings)', pr.pr_id, len(result.findings))
     except Exception as e:
-        state_db.finish_review(pr.repo_slug, pr.pr_id, pr.source_commit, error=str(e))
+        attempts = state_db.finish_review(
+            pr.repo_slug, pr.pr_id, pr.source_commit, error=str(e), count_failure=not _shutdown_event.is_set()
+        )
         logger.exception('Failed to review PR #%d', pr.pr_id)
+        if attempts >= MAX_FAILURES:
+            logger.warning(
+                'PR #%d@%s failed %d times, giving up until a new commit (use `reviewd pr --force` to retry)',
+                pr.pr_id,
+                pr.source_commit[:8],
+                attempts,
+            )
     finally:
         with _active_reviews_lock:
             _active_reviews.pop(review_key, None)
@@ -272,6 +285,9 @@ def _collect_eligible_prs(
             continue
         if state_db.has_review(pr.repo_slug, pr.pr_id, pr.source_commit):
             logger.debug('PR #%d@%s already reviewed, skipping', pr.pr_id, pr.source_commit[:8])
+            continue
+        if state_db.in_backoff(pr.repo_slug, pr.pr_id, pr.source_commit):
+            logger.debug('PR #%d@%s in failure backoff, skipping', pr.pr_id, pr.source_commit[:8])
             continue
         if project_config.review_cooldown_minutes > 0:
             minutes = state_db.minutes_since_last_review(pr.repo_slug, pr.pr_id)

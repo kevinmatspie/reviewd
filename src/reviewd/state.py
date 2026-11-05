@@ -4,6 +4,9 @@ import sqlite3
 import threading
 from pathlib import Path
 
+BACKOFF_MINUTES = (5, 15, 60)
+MAX_FAILURES = len(BACKOFF_MINUTES) + 1
+
 
 class StateDB:
     def __init__(self, db_path: str):
@@ -55,6 +58,10 @@ class StateDB:
                 ON posted_reviews (repo_slug, pr_id);
         """
         )
+        columns = {row['name'] for row in self.conn.execute('PRAGMA table_info(reviews)')}
+        if 'attempts' not in columns:
+            self.conn.execute('ALTER TABLE reviews ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0')
+            self.conn.commit()
 
     def has_review(self, repo_slug: str, pr_id: int, source_commit: str) -> bool:
         with self._lock:
@@ -67,20 +74,43 @@ class StateDB:
     def start_review(self, repo_slug: str, pr_id: int, source_commit: str):
         with self._lock:
             self.conn.execute(
-                'INSERT OR REPLACE INTO reviews (repo_slug, pr_id, source_commit, status) VALUES (?, ?, ?, ?)',
+                'INSERT INTO reviews (repo_slug, pr_id, source_commit, status) VALUES (?, ?, ?, ?) '
+                'ON CONFLICT(repo_slug, pr_id, source_commit) DO UPDATE SET status = excluded.status, '
+                'created_at = CURRENT_TIMESTAMP, finished_at = NULL, error_message = NULL',
                 (repo_slug, pr_id, source_commit, 'in_progress'),
             )
             self.conn.commit()
 
-    def finish_review(self, repo_slug: str, pr_id: int, source_commit: str, *, error: str | None = None):
+    def finish_review(
+        self, repo_slug: str, pr_id: int, source_commit: str, *, error: str | None = None, count_failure: bool = True
+    ) -> int:
         with self._lock:
             status = 'error' if error else 'success'
+            increment = 1 if error and count_failure else 0
             self.conn.execute(
-                'UPDATE reviews SET status = ?, finished_at = CURRENT_TIMESTAMP, error_message = ? '
-                'WHERE repo_slug = ? AND pr_id = ? AND source_commit = ?',
-                (status, error, repo_slug, pr_id, source_commit),
+                'UPDATE reviews SET status = ?, finished_at = CURRENT_TIMESTAMP, error_message = ?, '
+                'attempts = attempts + ? WHERE repo_slug = ? AND pr_id = ? AND source_commit = ?',
+                (status, error, increment, repo_slug, pr_id, source_commit),
             )
             self.conn.commit()
+            row = self.conn.execute(
+                'SELECT attempts FROM reviews WHERE repo_slug = ? AND pr_id = ? AND source_commit = ?',
+                (repo_slug, pr_id, source_commit),
+            ).fetchone()
+            return row['attempts'] if row else 0
+
+    def in_backoff(self, repo_slug: str, pr_id: int, source_commit: str) -> bool:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT attempts, (julianday('now') - julianday(finished_at)) * 1440 AS minutes "
+                'FROM reviews WHERE repo_slug = ? AND pr_id = ? AND source_commit = ? AND status = ?',
+                (repo_slug, pr_id, source_commit, 'error'),
+            ).fetchone()
+        if row is None or row['attempts'] == 0:
+            return False
+        if row['attempts'] >= MAX_FAILURES:
+            return True
+        return row['minutes'] is not None and row['minutes'] < BACKOFF_MINUTES[row['attempts'] - 1]
 
     def record_comment(self, repo_slug: str, pr_id: int, comment_id: int):
         with self._lock:

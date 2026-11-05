@@ -13,8 +13,12 @@ from reviewd.models import (
     CLI,
     SEVERITY_ORDER,
     AutoApproveConfig,
+    ContextRepo,
+    Engine,
     GithubConfig,
     GlobalConfig,
+    PassConfig,
+    PipelineConfig,
     ProjectConfig,
     RepoConfig,
     Severity,
@@ -65,6 +69,38 @@ def _parse_auto_approve(data: dict) -> AutoApproveConfig:
         rules=data.get('rules'),
         show_blocked_reason=data.get('show_blocked_reason', True),
     )
+
+
+def _parse_engine(value: str, where: str) -> Engine:
+    try:
+        return Engine(str(value))
+    except ValueError as e:
+        valid = ', '.join(engine.value for engine in Engine)
+        raise SystemExit(f'Invalid engine "{value}" {where}; valid: {valid}') from e
+
+
+def _parse_pass(data: dict, default_timeout: int) -> PassConfig:
+    return PassConfig(
+        cli=_parse_cli(data.get('cli', 'copilot')),
+        model=data.get('model'),
+        timeout=int(data.get('timeout', default_timeout)),
+        enabled=bool(data.get('enabled', True)),
+        args=[str(a) for a in data.get('args', [])],
+    )
+
+
+def _parse_context_repos(data: dict) -> dict[str, ContextRepo]:
+    repos = {}
+    for name, entry in data.items():
+        if not isinstance(entry, dict) or 'path' not in entry:
+            raise SystemExit(f'Context repo "{name}" is missing required field "path"')
+        repos[str(name)] = ContextRepo(
+            name=str(name),
+            path=str(Path(entry['path']).expanduser()),
+            ref=str(entry.get('ref', 'main')),
+            description=str(entry.get('description', '')),
+        )
+    return repos
 
 
 def _merge_auto_approve(
@@ -151,6 +187,8 @@ def load_global_config(path: str | Path | None = None) -> GlobalConfig:
         global_gh = _parse_github_config(data['github'])
 
     global_cli = _parse_cli(data.get('cli', 'claude'))
+    context_repos = _parse_context_repos(data.get('context_repos') or {})
+    review_data = data.get('review') or {}
 
     repos = []
     for i, repo_data in enumerate(data.get('repos', [])):
@@ -176,6 +214,13 @@ def load_global_config(path: str | Path | None = None) -> GlobalConfig:
                 f'Repo #{i + 1} "skip_severities" in {path} has invalid values {invalid}; '
                 f'valid: {sorted(valid_severities)}'
             )
+        repo_context = [str(n) for n in repo_data.get('context') or []]
+        for ctx_name in repo_context:
+            if ctx_name not in context_repos:
+                raise SystemExit(f'Repo "{repo_data["name"]}" references unknown context repo "{ctx_name}"')
+        repo_engine = (
+            _parse_engine(repo_data['engine'], f'for repo "{repo_data["name"]}"') if 'engine' in repo_data else None
+        )
         repos.append(
             RepoConfig(
                 name=repo_data['name'],
@@ -189,6 +234,8 @@ def load_global_config(path: str | Path | None = None) -> GlobalConfig:
                 formal_review=repo_data.get('formal_review'),  # None = inherit from global
                 watch_paths=watch_paths,
                 skip_severities=skip_severities,
+                engine=repo_engine,
+                context=repo_context,
             )
         )
 
@@ -222,6 +269,10 @@ def load_global_config(path: str | Path | None = None) -> GlobalConfig:
         review_title=data.get('review_title', "review'd by {cli}"),
         footer=data.get('footer', GlobalConfig.footer),
         log_file=log_file,
+        engine=_parse_engine(data.get('engine', 'legacy'), f'in {path}'),
+        context_repos=context_repos,
+        review_find=_parse_pass(review_data.get('find') or {}, 900),
+        review_verify=_parse_pass(review_data.get('verify') or {}, 600),
     )
 
 
@@ -349,6 +400,27 @@ def resolve_github_config(global_config: GlobalConfig, repo_config: RepoConfig) 
 
 def effective_formal_review(global_config: GlobalConfig, repo: RepoConfig) -> bool:
     return repo.formal_review if repo.formal_review is not None else global_config.formal_review
+
+
+def effective_engine(global_config: GlobalConfig, repo: RepoConfig) -> Engine:
+    return repo.engine if repo.engine is not None else global_config.engine
+
+
+def resolve_pipeline(global_config: GlobalConfig, repo: RepoConfig) -> PipelineConfig | None:
+    if effective_engine(global_config, repo) != Engine.PIPELINE:
+        return None
+    return PipelineConfig(
+        find=global_config.review_find,
+        verify=global_config.review_verify,
+        context=[global_config.context_repos[name] for name in repo.context],
+    )
+
+
+def review_label(global_config: GlobalConfig, repo: RepoConfig) -> tuple[CLI, str | None]:
+    pipeline = resolve_pipeline(global_config, repo)
+    if pipeline is not None:
+        return pipeline.find.cli, pipeline.find.model
+    return repo.cli, repo.model or global_config.model
 
 
 # Providers wrap a long-lived httpx.Client. Recreating them per call leaks
