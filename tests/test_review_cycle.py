@@ -97,3 +97,23 @@ def test_dry_run_posts_nothing(provider, state_db, pr, repo_config, global_confi
     out = capsys.readouterr().out
     assert 'DRY RUN' in out
     assert 'Test finding' in out
+
+
+def test_pipeline_result_posts_edge_cases_context_and_demoted_findings(
+    provider, state_db, pr, repo_config, global_config
+):
+    project_config = ProjectConfig(inline_comments_for=['critical'])
+    demoted = make_finding(severity='critical', title='Breaks caller', line=99)
+    demoted.inline = False
+    result = make_result(findings=[demoted])
+    result.edge_cases = [make_finding(title='Empty session list')]
+    result.context_refs = ['mobile-services@main (abc1234)']
+
+    post_review(provider, state_db, pr, result, repo_config, project_config, global_config)
+
+    assert len(provider.posted_comments) == 1
+    body = provider.posted_comments[0]['body']
+    assert 'Breaks caller' in body
+    assert 'Edge cases to consider (1)' in body
+    assert 'Empty session list' in body
+    assert '**Context:** mobile-services@main (abc1234)' in body

@@ -132,6 +132,13 @@ def _format_summary_comment(
             lines.append(_format_finding_summary(finding))
         lines.append('')
 
+    if result.edge_cases:
+        lines.append(f'### Edge cases to consider ({len(result.edge_cases)})')
+        lines.append('')
+        for finding in result.edge_cases:
+            lines.append(_format_finding_summary(finding))
+        lines.append('')
+
     if result.summary:
         lines.append(f'**Bottom line:** {result.summary}')
         lines.append('')
@@ -142,6 +149,10 @@ def _format_summary_comment(
 
     if approve_blocked_reason:
         lines.append(f'**Auto-approve blocked:** AI recommended approval, but {approve_blocked_reason}.')
+        lines.append('')
+
+    if result.context_refs:
+        lines.append(f'**Context:** {"; ".join(result.context_refs)}')
         lines.append('')
 
     duration_str = f' in {_format_duration(result.duration_seconds)}' if result.duration_seconds else ''
@@ -309,8 +320,10 @@ def post_review(
             logger.debug('Skipping duplicate finding: %s:%s %s', f.file, f.line, f.title)
     # Filter out skipped severities
     skip = {s for s in project_config.skip_severities}
+    edge_cases = result.edge_cases
     if skip:
         unique_findings = [f for f in unique_findings if f.severity.value not in skip]
+        edge_cases = [f for f in edge_cases if f.severity.value not in skip]
         logger.info('Filtered out %s severities, %d findings remain', skip, len(unique_findings))
 
     result = ReviewResult(
@@ -321,10 +334,14 @@ def post_review(
         approve=result.approve,
         approve_reason=result.approve_reason,
         duration_seconds=result.duration_seconds,
+        edge_cases=edge_cases,
+        context_refs=result.context_refs,
     )
 
     inline_severities = {s for s in project_config.inline_comments_for}
-    inline_findings = [f for f in result.findings if f.severity.value in inline_severities and f.file and f.line]
+    inline_findings = [
+        f for f in result.findings if f.inline and f.severity.value in inline_severities and f.file and f.line
+    ]
 
     if not pr.is_local:
         inline_findings = _filter_inline_findings_by_diff(inline_findings, provider, pr)

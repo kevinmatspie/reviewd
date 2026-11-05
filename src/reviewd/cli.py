@@ -13,7 +13,7 @@ import click
 from reviewd.colors import BOLD_RED, CLEAR_LINE, CYAN, DIM, GREEN, RED, RESET, YELLOW
 from reviewd.config import get_provider, load_global_config
 from reviewd.daemon import review_single_pr, run_poll_loop
-from reviewd.models import CLI, GlobalConfig, RepoConfig
+from reviewd.models import CLI, Engine, GlobalConfig, RepoConfig
 from reviewd.state import StateDB
 
 try:
@@ -32,6 +32,15 @@ def _apply_cli_override(config: GlobalConfig, cli: str | None):
     config.cli = cli_enum
     for repo in config.repos:
         repo.cli = cli_enum
+
+
+def _apply_engine_override(config: GlobalConfig, engine: str | None):
+    if engine is None:
+        return
+    engine_enum = Engine(engine)
+    config.engine = engine_enum
+    for repo in config.repos:
+        repo.engine = engine_enum
 
 
 def _get_repo_config(config: GlobalConfig, repo_arg: str) -> RepoConfig | None:
@@ -310,13 +319,15 @@ def watch(ctx, verbose: bool, dry_run: bool, review_existing: bool, cli: str | N
     default=None,
     help='Override AI CLI (legacy engine)',
 )
+@click.option('--engine', type=click.Choice(['legacy', 'pipeline']), default=None, help='Override review engine')
 @click.pass_context
-def pr(ctx, repo: str, pr_id: int, verbose: bool, dry_run: bool, force: bool, cli: str | None):
+def pr(ctx, repo: str, pr_id: int, verbose: bool, dry_run: bool, force: bool, cli: str | None, engine: str | None):
     """One-shot review of a specific PR."""
     _resolve_verbose(ctx, verbose)
     _ensure_global_config(ctx.obj['config_path'])
     config = load_global_config(ctx.obj['config_path'])
     _apply_cli_override(config, cli)
+    _apply_engine_override(config, engine)
     review_single_pr(config, repo, pr_id=pr_id, dry_run=dry_run, force=force)
 
 
@@ -329,11 +340,12 @@ def pr(ctx, repo: str, pr_id: int, verbose: bool, dry_run: bool, force: bool, cl
     default=None,
     help='Override AI CLI (legacy engine)',
 )
+@click.option('--engine', type=click.Choice(['legacy', 'pipeline']), default=None, help='Override review engine')
 @click.pass_context
-def scan(ctx, base_branch: str | None, verbose: bool, cli: str | None):
+def scan(ctx, base_branch: str | None, verbose: bool, cli: str | None, engine: str | None):
     """Review local changes (including uncommitted work) against a base branch. Prints findings, posts nothing."""
     from reviewd.commenter import post_review
-    from reviewd.config import load_project_config
+    from reviewd.config import load_project_config, resolve_pipeline, review_label
     from reviewd.models import PRInfo
     from reviewd.reviewer import get_base_branch, get_current_branch, get_diff_lines, review_pr
 
@@ -341,6 +353,7 @@ def scan(ctx, base_branch: str | None, verbose: bool, cli: str | None):
     _ensure_global_config(ctx.obj['config_path'])
     config = load_global_config(ctx.obj['config_path'])
     _apply_cli_override(config, cli)
+    _apply_engine_override(config, engine)
 
     repo_config = _get_repo_config(config, '.')
     if not repo_config:
@@ -391,6 +404,9 @@ def scan(ctx, base_branch: str | None, verbose: bool, cli: str | None):
         click.echo(f'{GREEN}No changes detected between {source_branch} and {base_ref}.{RESET}')
         return
 
+    pipeline = resolve_pipeline(config, repo_config)
+    label_cli, label_model = review_label(config, repo_config)
+
     result = review_pr(
         str(repo_path),
         pr,
@@ -399,6 +415,7 @@ def scan(ctx, base_branch: str | None, verbose: bool, cli: str | None):
         model=active_model,
         cli_args=config.cli_args,
         cli_defaults=config.cli_defaults,
+        pipeline=pipeline,
     )
 
     state_db = StateDB(config.state_db)
@@ -411,8 +428,8 @@ def scan(ctx, base_branch: str | None, verbose: bool, cli: str | None):
             repo_config,
             project_config,
             config,
-            cli=repo_config.cli,
-            model=active_model,
+            cli=label_cli,
+            model=label_model,
             dry_run=True,
             diff_lines=diff_lines,
         )

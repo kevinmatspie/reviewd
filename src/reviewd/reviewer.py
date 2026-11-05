@@ -20,6 +20,7 @@ from reviewd import scope
 from reviewd.models import (
     CLI,
     Finding,
+    PipelineConfig,
     PRInfo,
     ProjectConfig,
     ReviewResult,
@@ -706,10 +707,15 @@ def review_pr(
     cli_args: list[str] | None = None,
     cli_defaults: dict[CLI, list[str]] | None = None,
     watch_paths: list[str] | None = None,
+    pipeline: PipelineConfig | None = None,
 ) -> ReviewResult:
     worktree_path = None if pr.is_local else create_worktree(repo_path, pr)
     review_cwd = worktree_path or repo_path
     try:
+        if pipeline is not None:
+            from reviewd.pipeline import run_pipeline
+
+            return run_pipeline(review_cwd, pr, project_config, pipeline, cli_defaults, watch_paths=watch_paths)
         prompt = build_review_prompt(pr, project_config, watch_paths=watch_paths)
         t0 = time.monotonic()
         output = invoke_cli(

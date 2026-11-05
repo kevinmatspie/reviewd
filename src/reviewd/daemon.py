@@ -19,7 +19,7 @@ import httpx
 from reviewd import scope
 from reviewd.colors import BOLD_WHITE, CLEAR_LINE, CYAN, DIM, GREEN, RESET, WHITE, YELLOW
 from reviewd.commenter import post_review
-from reviewd.config import get_provider, load_project_config
+from reviewd.config import get_provider, load_project_config, resolve_pipeline, review_label
 from reviewd.models import GlobalConfig, PRInfo, ProjectConfig, RepoConfig
 from reviewd.reviewer import DEFAULT_TIMEOUT, cleanup_stale_worktrees, get_diff_lines, review_pr, terminate_all
 from reviewd.state import MAX_FAILURES, StateDB
@@ -211,6 +211,8 @@ def _process_pr(
         pr.title,
     )
     provider = get_provider(global_config, repo_config)
+    pipeline = resolve_pipeline(global_config, repo_config)
+    label_cli, label_model = review_label(global_config, repo_config)
     state_db.start_review(pr.repo_slug, pr.pr_id, pr.source_commit)
     review_key = (pr.repo_slug, pr.pr_id)
 
@@ -227,6 +229,7 @@ def _process_pr(
             cli_args=global_config.cli_args,
             cli_defaults=global_config.cli_defaults,
             watch_paths=repo_config.watch_paths,
+            pipeline=pipeline,
         )
         if _shutdown_event.is_set():
             state_db.finish_review(pr.repo_slug, pr.pr_id, pr.source_commit, error='shutdown', count_failure=False)
@@ -239,8 +242,8 @@ def _process_pr(
             repo_config,
             project_config,
             global_config,
-            cli=repo_config.cli,
-            model=repo_config.model or global_config.model,
+            cli=label_cli,
+            model=label_model,
             dry_run=dry_run,
             diff_lines=diff_lines,
         )
@@ -375,6 +378,9 @@ def run_poll_loop(
 
     for repo_config in global_config.repos:
         cleanup_stale_worktrees(repo_config.path)
+    for ctx in global_config.context_repos.values():
+        if Path(ctx.path).exists():
+            cleanup_stale_worktrees(ctx.path)
 
     _boot_summary(global_config, state_db, review_existing)
 
