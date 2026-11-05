@@ -1,5 +1,7 @@
 # Handoff: Copilot Review Engine (laptop → Mac mini)
 
+> **Status 2026-11-05:** Phases 0–6 are done on this branch. See `2026-11-05-copilot-review-engine-status.md` for results, deviations, and what Phase 7 needs. Phase 7 needs Kevin. Don't re-run Phases 0–6.
+
 Written 2026-11-05 at the end of a brainstorming and planning session on Kevin's MacBook Air. The implementation runs on the Mac mini so it keeps going when the laptop lid is closed. **A fresh session has none of the conversation that produced this.** This file, the spec, and the plan are the whole context.
 
 ## Start here

@@ -72,6 +72,15 @@ Output tail:
 
 The smoke test is a plumbing check on a toy change, not evidence of quality on the mobile apps. That's what the Phase 7 evaluation is for.
 
+**Not yet exercised end to end:** the non-local path the daemon and `reviewd pr` use. That covers:
+
+- `create_worktree` checking out the PR head SHA
+- `run_pipeline` with `origin/<dest>` as base, on a detached HEAD
+- `_filter_inline_findings_by_diff` against a real provider
+- a context repo fetched from a real remote
+
+`scan` (the plan's smoke test) uses the local path. The unit tests cover the pieces, but **the first `reviewd pr <repo> <id> --dry-run --engine pipeline` in Phase 7 is the first real run of that path.** Watch that one closely.
+
 ## Deviations from the plan, and why
 
 1. **Option A (no shell)** replaces the `READ_ONLY_GIT` shell allowlist, per the spike and your decision.
@@ -118,9 +127,21 @@ I reviewed the branch myself as I went, then had an independent review agent rea
 
 ## Behavior changes that affect `legacy` repos (mobile-tests, QAdevelopment)
 
-- **Backoff:** Failed reviews back off 5/15/60 minutes and give up after the 4th failure on the same commit. A new commit, or `reviewd pr --force`, retries.
-- **Timeout:** `invoke_cli`'s timeout now actually fires, and on timeout it kills the whole process group. That's 600 s by default for legacy.
-- **Codex:** The default sandbox is now `read-only`. Neither SPIE repo uses Codex.
+This is the complete list, so you can revert any you don't want.
+
+**The two intended changes (from the plan):**
+
+1. **Backoff:** Failed reviews back off 5/15/60 minutes and give up after the 4th failure on the same commit. A new commit, or `reviewd pr --force`, retries. Shutdown aborts aren't counted.
+2. **Timeout:** `invoke_cli`'s timeout now actually fires, and on timeout it kills the whole process group. That's 600 s by default for legacy.
+
+**Small extras I made without pausing (stop condition 3 territory):**
+
+3. **Empty error messages:** A failure whose exception has an empty message is recorded as an error (`type(e).__name__`) instead of silently as `success`. (`daemon.py`)
+4. **Output decoding:** CLI output is decoded as UTF-8 with `errors='replace'`, so stray bytes can't kill a reader thread and hang the review until the timeout. Before, the platform default encoding applied, and an undecodable byte raised. (`reviewer.py`)
+5. **Auth errors:** A non-zero exit whose stderr or stdout looks like an auth failure now raises `CLIAuthError` (a `RuntimeError` subclass) with a generic message, instead of a plain `RuntimeError`. For the daemon it's still an error plus backoff. (`reviewer.py`)
+6. **stdin:** The prompt is written on its own thread. This only affects stdin-mode CLIs (Codex); Claude and Gemini take the prompt as an argument, as before.
+7. **Codex:** The default sandbox is now `read-only` (in the spec). Neither SPIE repo uses Codex.
+8. **CLI help:** The `--cli` help text says "(legacy engine)", and `copilot` is a new choice. No behavior change.
 
 ## Phase 7: what Kevin needs to do
 

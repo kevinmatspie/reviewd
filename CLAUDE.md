@@ -60,4 +60,4 @@ rm -rf dist && uv build && uv publish
 
 ## In-flight work (branch `feat/copilot-review-engine`)
 
-Implementing the `pipeline` review engine (Copilot CLI find → verify, with `mobile-services` as read-only context). Before doing anything on this branch, read `docs/superpowers/plans/2026-11-05-copilot-review-engine-handoff.md`. Remove this section when the branch merges.
+Implementing the `pipeline` review engine (Copilot CLI find → verify, with `mobile-services` as read-only context). Phases 0–6 are done; current state and Phase 7 steps are in `docs/superpowers/plans/2026-11-05-copilot-review-engine-status.md`. Background: `docs/superpowers/plans/2026-11-05-copilot-review-engine-handoff.md`. Remove this section when the branch merges.
