@@ -2,7 +2,11 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Spec:** `docs/superpowers/specs/2026-11-05-copilot-review-engine-design.md`. Read it first; this plan implements it.
+**Read first, in this order:**
+
+1. `docs/superpowers/plans/2026-11-05-copilot-review-engine-handoff.md`: machine setup, safety rules, autonomy and stop conditions.
+2. `docs/superpowers/specs/2026-11-05-copilot-review-engine-design.md`: what we're building and why.
+3. This plan.
 
 **Goal:** Add a `pipeline` review engine (Copilot CLI find pass → verify pass, with read-only cross-repo context from `mobile-services`), selectable per repo next to the unchanged `legacy` engine.
 
@@ -12,16 +16,18 @@
 
 **Project conventions (from `CLAUDE.md`, they override skill defaults):**
 - Google style, single quotes for strings, double quotes for messages. No docstrings or comments unless genuinely needed. No broad `except`.
-- Tests: Kevin approved tests for diff anchoring, verdict merge, backoff, Copilot command building, context fallback, and engine dispatch. This plan also proposes tests for the state-schema migration, the `invoke_cli` timeout, verify retry, `run_pipeline` orchestration, the prompt builders, and posting of edge cases. **Confirm those additions with Kevin before writing them.** Do not add others.
-- **Commits:** Only when Kevin says so. Each phase ends with a "Checkpoint" step: run the full suite and lint, show the diff summary, and ask Kevin whether to commit. The commit messages given are suggestions.
+- Tests: Kevin approved (2026-11-05) every test in this plan: diff anchoring, verdict merge, backoff, the state-schema migration, Copilot command building, the `invoke_cli` timeout, context fallback, engine dispatch, verify retry, `run_pipeline` orchestration, the prompt builders, and posting of edge cases. Do not add others.
+- **Commits:** Kevin wants this to run unattended. At each "Checkpoint" step, run the full suite and lint, then **commit to `feat/copilot-review-engine` and push that branch** without waiting. The commit messages given are suggestions. Never merge to `main`, never publish to PyPI, and never touch the live daemon (see the handoff's stop conditions). Where a checkpoint says "ask Kevin whether to commit," read it as "commit and push the feature branch."
 - Never add Co-Authored-By to commits.
 
-**Environment prerequisite:** `uv` is not installed on Kevin's laptop (as of 2026-11-05). Install it (`brew install uv`) or run this plan on the Mac mini. Every command below assumes `uv sync` has been run.
+**Environment prerequisite:** `uv` must be on PATH (Homebrew: `/opt/homebrew/bin/uv`). Run `uv sync` once in the checkout before starting.
 
 **Commands used throughout:**
 - Tests: `uv run pytest -q`
 - One test: `uv run pytest tests/test_x.py::test_name -v`
 - Lint: `uv run ruff check src tests && uv run ruff format --check src tests`
+
+**Lint baseline:** `main` at `9c1d3e7` already fails lint. There are two E501 errors (`commenter.py:535`, `providers/github.py:188`), and `ruff format --check` would reformat `commenter.py`, `providers/github.py`, and `reviewer.py`. **Do not fix or reformat pre-existing code**, because it buries the real diff. The bar is no *new* lint errors: run `uv run ruff check` and `uv run ruff format --check` on the files you create, and keep edits to existing files in their surrounding style. Test baseline: 62 passed on `main` at `9c1d3e7` (laptop, 2026-11-05).
 
 ---
 
@@ -307,7 +313,7 @@ Expected: 6 passed, and the timeout test finishes in about 1s. Then run `uv run 
 
 **Step 2:** Run `uv run reviewd pr --help | grep -A1 -- --cli`. Expected: `[claude|gemini|codex|copilot]`.
 
-**Step 3: Checkpoint (end of Phase 1).** Run `uv run pytest -q` and the lint command. Ask Kevin whether to commit. Suggested message: `Add Copilot CLI runner with read-only flags and context dir support`.
+**Step 3: Checkpoint (end of Phase 1).** Run `uv run pytest -q` and the lint command. Commit and push the feature branch. Suggested message: `Add Copilot CLI runner with read-only flags and context dir support`.
 
 ---
 
@@ -736,7 +742,7 @@ Import `MAX_FAILURES` from `reviewd.state`. The existing `except Exception` is p
 Run: `uv run pytest tests/test_state_backoff.py tests/test_state_lifecycle.py tests/test_state_concurrent.py -v`
 Expected: All pass, including the existing `test_error_review_not_counted`.
 
-**Step 5: Checkpoint (end of Phases 2–3).** Run the full suite and lint. Tell Kevin that the backoff also changes behavior for the `legacy` repos (mobile-tests, QAdevelopment): failures no longer retry every poll. Ask whether to commit. Suggested message: `Add engine/context config and failure backoff for reviews`.
+**Step 5: Checkpoint (end of Phases 2–3).** Run the full suite and lint. Note in the commit message and the final report that the backoff also changes behavior for the `legacy` repos (mobile-tests, QAdevelopment): failures no longer retry every poll. Commit and push the feature branch. Suggested message: `Add engine/context config and failure backoff for reviews`.
 
 ---
 
@@ -1570,7 +1576,7 @@ def build_verify_prompt(
 Run: `uv run pytest tests/test_pipeline_prompt.py tests/test_prompt.py tests/test_config_and_prompt.py -v`
 Expected: All pass.
 
-**Step 6: Checkpoint (end of Phase 4).** Run the full suite and lint. Ask Kevin whether to commit. Suggested message: `Add pipeline building blocks: diff anchoring, verdict merge, context worktrees, prompts`.
+**Step 6: Checkpoint (end of Phase 4).** Run the full suite and lint. Commit and push the feature branch. Suggested message: `Add pipeline building blocks: diff anchoring, verdict merge, context worktrees, prompts`.
 
 ---
 
@@ -2009,7 +2015,7 @@ A repo forced to `pipeline` with no `context:` simply runs without context.
 
 **Step 4: Verify.** Run `uv run pytest -q` and `uv run reviewd pr --help`. Expected: tests pass and `--engine [legacy|pipeline]` is listed.
 
-**Step 5: Checkpoint (end of Phase 5).** Run the full suite and lint. Ask Kevin whether to commit. Suggested message: `Add find/verify pipeline engine with per-repo dispatch and posting of edge cases`.
+**Step 5: Checkpoint (end of Phase 5).** Run the full suite and lint. Commit and push the feature branch. Suggested message: `Add find/verify pipeline engine with per-repo dispatch and posting of edge cases`.
 
 ---
 
@@ -2029,7 +2035,7 @@ A repo forced to `pipeline` with no `context:` simply runs without context.
 **Step 2:** Run the lint command. Expected: clean. If `ruff format --check` fails, run `uv run ruff format src tests` and re-check.
 **Step 3:** Smoke test on this repo (it's on GitHub, so the Copilot CLI is the only external dependency). Add a temporary repo entry for `reviewd` itself with `engine: pipeline` to a scratch config, then run `uv run reviewd --config <scratch> scan main --engine pipeline -v` from a branch with a small change. Expected: the find and verify passes run, the `copilot usage:` lines are logged, and a summary is printed. Paste the tail of the output for Kevin.
 
-**Step 4: Checkpoint.** Ask Kevin whether to commit the docs and push the branch.
+**Step 4: Checkpoint.** Commit and push the feature branch, then stop: Phase 7 needs Kevin.
 
 ---
 

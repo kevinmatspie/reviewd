@@ -52,3 +52,7 @@ rm -rf dist && uv build && uv publish
 - Codex CLI outputs raw JSON (no markdown fences) — extract_json falls back to raw JSON object parsing
 - Inline suggestions are single-line only (TODO: multi-line support)
 - AI may hallucinate line numbers — prompt instructs to double-check but not guaranteed
+
+## In-flight work (branch `feat/copilot-review-engine`)
+
+Implementing the `pipeline` review engine (Copilot CLI find → verify, with `mobile-services` as read-only context). Before doing anything on this branch, read `docs/superpowers/plans/2026-11-05-copilot-review-engine-handoff.md`. Remove this section when the branch merges.
