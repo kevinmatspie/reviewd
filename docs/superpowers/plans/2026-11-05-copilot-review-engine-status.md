@@ -133,6 +133,10 @@ With last night's open PRs, the pipeline caught **2 of 3** shipped regressions p
 - **Context worktree collision.** `ctx-<slug>-pr-<id>` was shared by concurrent reviews of the same PR (here, two `scan`s with PR id 0; in production, the daemon plus a manual `reviewd pr`). The first review to finish deleted it under the other, whose verify pass then failed. That discarded a 22-candidate, 4.1M-token find pass, which is the concrete cost of the "verify failure discards find" open item. Each checkout now gets a unique suffix. The legacy PR worktree `pr-<id>` has the same pre-existing collision risk; flagged, not changed.
 - **A diff over the cap lost whole files.** The cut fell at a file boundary, so a 198k-char file diff (the one with the bug) was dropped, and with no shell the model couldn't see what changed in it. The full diff is now written to `$XDG_CACHE_HOME/reviewd/changes/<run>/change.diff` (outside the temp directory), passed to both passes via `--add-dir`, and removed afterwards. The embedded part is cut at a hunk boundary. A crash can orphan a change directory; these are small files, and there's no sweep yet.
 
+**Decisions (Kevin, 2026-11-06):**
+- **Go live** with `engine: pipeline` on both apps, auto-approve off (part C).
+- **Possible bugs in shipped code:** the non-target findings from the three replays are written up for a separate triage session in `~kevinm/reviewd-eval/shipped-code-findings.md`. It covers 11 issues both engines reported independently, plus a few high-impact pipeline-only claims, with triage instructions. None have been verified.
+
 **Incident: Kevin's dev clones were fast-forwarded.** The first eval runs (2026-11-05 16:08) used a config copied from Kevin's, pointing at his dev clones. reviewd's `_sync_project_config` runs `git pull --ff-only` on the configured repo path, so it fast-forwarded iOS `v14.1.3` (`76e26b52` → `14d2bde8`) and Android `master` (`fae3316f` → `54137899`). Both working copies were clean, so no work was lost. The eval now uses its own clones under `~/reviewd-eval/clones/`. To undo: `git -C <clone> reset --hard <old sha>`.
 
 ## Deviations from the plan, and why
