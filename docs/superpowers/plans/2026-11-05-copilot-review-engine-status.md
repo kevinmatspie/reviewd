@@ -81,6 +81,31 @@ The smoke test is a plumbing check on a toy change, not evidence of quality on t
 
 `scan` (the plan's smoke test) uses the local path. The unit tests cover the pieces, but **the first `reviewd pr <repo> <id> --dry-run --engine pipeline` in Phase 7 is the first real run of that path.** Watch that one closely.
 
+## First real runs on the apps (2026-11-05 evening, as `kevinm`, dry run)
+
+These were the first end-to-end runs of the non-local path:
+
+- the PR worktree at the head SHA
+- `origin/<dest>` as the base
+- a real Bitbucket provider
+- `mobile-services@main (8a663fa)` as context from `~kevinm/repos/context/mobile-services`
+
+Both completed. All worktrees were cleaned up afterwards. Logs are in `~/reviewd-eval/logs/`.
+
+| PR | Pipeline (gpt-6.1-sol, find → verify) | Legacy (claude-sonnet-5-5, `--effort high`) |
+|---|---|---|
+| Android #625 (MOB-2102, substitute/journal answers, Room 19→20) | 126 s, 2 premium requests (find: 10 model calls, ~659k input tokens). **1 suggestion:** updating a migrated report replaces the row without `presentationComments`, and the email query drops them, so previously saved comments are lost. It traced the DAO, view models, report sending, and the backend email contract. | 73 s, **0 findings.** The summary noticed old comments are no longer sent but called it "appears intentional". |
+| iOS #427 (MOB-2075, iPad Share button) | 325 s, 2 premium requests (find: 29 model calls, **~2.2M input tokens**). **1 suggestion:** six 75-point toolbar buttons about 72 points apart on a ~430-point iPad toolbar overlap, and "Request Paper" falls partly outside its touch area. | 93 s. **3 findings:** removing `UIStatusBarHidden` from the shared Info.plist changes the iPhone launch and loading layout (a real cross-device regression the pipeline missed); unrelated Xcode project and scheme churn; and good tests. It missed the toolbar overlap. |
+
+**Observations for Phase 7 tuning (not acted on):**
+
+- **Few candidates.** The find pass produced only **one candidate per PR**, even though it's told to report every supportable issue. Each engine caught a real regression the other missed. Options to evaluate:
+  - `review.find.args: [--reasoning-effort, high]`
+  - a find-prompt step that lists every changed file, plist and storyboard included, and assesses each one
+  - asking for a minimum sweep summary per changed file
+- **Token use.** Premium-request cost is flat at 1 per pass. Token use varies widely, from 659k to 2.2M input tokens on the find pass. Watch this if Copilot billing moves to AI credits (`totalNanoAiu` is in the usage file).
+- **Expired token in `kevinm`'s pilot secrets.** The legacy runs first failed with Claude's "Not logged in · Please run /login" because the `CLAUDE_CODE_OAUTH_TOKEN` in `kevinm`'s `~/.config/reviewd/secrets.env` appears expired. The eval runner now unsets it and uses Kevin's stored Claude login. This doesn't affect `mobiletest`'s live token. The run also showed the message wasn't classified as an auth error, so `_AUTH_ERROR_PATTERN` now includes it (`3a0f1cc`).
+
 ## Deviations from the plan, and why
 
 1. **Option A (no shell)** replaces the `READ_ONLY_GIT` shell allowlist, per the spike and your decision.
