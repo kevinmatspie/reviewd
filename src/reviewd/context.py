@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import threading
+import uuid
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,7 +43,7 @@ def _git(args: list[str], cwd: str, timeout: int = 30) -> subprocess.CompletedPr
 
 def _worktree_dir(repo: ContextRepo, pr: PRInfo) -> Path:
     slug = re.sub(r'[^A-Za-z0-9_.-]', '-', pr.repo_slug)
-    return Path(repo.path) / '.reviewd-worktrees' / f'ctx-{slug}-pr-{pr.pr_id}'
+    return Path(repo.path) / '.reviewd-worktrees' / f'ctx-{slug}-pr-{pr.pr_id}-{uuid.uuid4().hex[:8]}'
 
 
 def prepare_context(repo: ContextRepo, pr: PRInfo) -> ContextCheckout:
@@ -71,9 +72,6 @@ def prepare_context(repo: ContextRepo, pr: PRInfo) -> ContextCheckout:
             return checkout
         checkout.commit = rev.stdout.strip()
 
-        if target.exists():
-            _git(['worktree', 'remove', '--force', str(target)], repo.path)
-            shutil.rmtree(target, ignore_errors=True)
         _git(['worktree', 'prune'], repo.path)
         target.parent.mkdir(parents=True, exist_ok=True)
         add = _git(

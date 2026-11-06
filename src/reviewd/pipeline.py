@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -96,29 +97,48 @@ def changed_lines(
     return parse_changed_lines(diff)
 
 
+def _diff_cut(diff: str, limit: int) -> int:
+    cut = max(diff.rfind('\n@@ ', 0, limit), diff.rfind('\ndiff --git ', 0, limit))
+    return cut if cut > 0 else limit
+
+
 def collect_change(
     cwd: str, base_ref: str, include_worktree: bool = False, watch_paths: list[str] | None = None
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     base = merge_base(cwd, base_ref)
     pathspec = scope.pathspec_args(watch_paths or [])
     commits = _git(cwd, ['log', '--reverse', '--no-color', '--format=%h %s', f'{base}..HEAD', *pathspec]).strip()
     if len(commits) > MAX_PROMPT_COMMITS_CHARS:
         commits = commits[:MAX_PROMPT_COMMITS_CHARS] + '\n... (commit list truncated)'
     targets = _diff_targets(base, include_worktree)
-    diff = _git(cwd, ['diff', '--no-color', '--no-ext-diff', *targets, *pathspec]).strip()
-    if len(diff) > MAX_PROMPT_DIFF_CHARS:
+    full_diff = _git(cwd, ['diff', '--no-color', '--no-ext-diff', *targets, *pathspec]).strip()
+    diff = full_diff
+    if len(full_diff) > MAX_PROMPT_DIFF_CHARS:
         stat = _git(cwd, ['diff', '--stat=200', '--no-color', *targets, *pathspec]).strip()
-        cut = diff.rfind('\ndiff --git ', 0, MAX_PROMPT_DIFF_CHARS)
-        shown = diff[: cut if cut > 0 else MAX_PROMPT_DIFF_CHARS]
-        logger.warning('Diff is %d chars, embedding the first %d plus --stat', len(diff), len(shown))
+        shown = full_diff[: _diff_cut(full_diff, MAX_PROMPT_DIFF_CHARS)]
+        logger.warning('Diff is %d chars, embedding the first %d plus --stat', len(full_diff), len(shown))
         diff = (
             f'{shown}\n\n'
-            '... DIFF TRUNCATED. Files changed in the full diff (read the ones not shown above in full '
-            f'with your file-reading tool):\n{stat}'
+            '... DIFF TRUNCATED HERE. The rest of the diff is in the complete diff file named above. '
+            'Files changed in the full diff:\n'
+            f'{stat}'
         )
-    if not diff:
+    if not full_diff:
         logger.warning('Empty diff between %s and %s', base[:8], 'worktree' if include_worktree else 'HEAD')
-    return commits, diff
+    return commits, diff, full_diff
+
+
+def _changes_root() -> Path:
+    return Path(os.environ.get('XDG_CACHE_HOME', '~/.cache')).expanduser() / 'reviewd' / 'changes'
+
+
+def write_change_file(full_diff: str) -> Path:
+    root = _changes_root()
+    root.mkdir(parents=True, exist_ok=True)
+    change_dir = Path(tempfile.mkdtemp(prefix='change-', dir=root))
+    change_file = change_dir / 'change.diff'
+    change_file.write_text(full_diff)
+    return change_file
 
 
 def anchor_findings(findings: list[Finding], changed: dict[str, set[int]]) -> None:
@@ -319,14 +339,15 @@ def run_pipeline(
     t0 = time.monotonic()
     base_ref = pr.destination_branch if pr.is_local else f'origin/{pr.destination_branch}'
     base = merge_base(cwd, base_ref)
-    commits, diff = collect_change(cwd, base, include_worktree=pr.is_local, watch_paths=watch_paths)
-    change = {'commits': commits, 'diff': diff, 'scope_paths': watch_paths}
+    commits, diff, full_diff = collect_change(cwd, base, include_worktree=pr.is_local, watch_paths=watch_paths)
+    change_file = write_change_file(full_diff)
+    change = {'commits': commits, 'diff': diff, 'scope_paths': watch_paths, 'diff_file': str(change_file)}
 
     contexts = []
     try:
         for repo in pipeline.context:
             contexts.append(prepare_context(repo, pr))
-        add_dirs = [c.worktree for c in contexts if c.worktree]
+        add_dirs = [c.worktree for c in contexts if c.worktree] + [str(change_file.parent)]
         find_prompt = build_find_prompt(pr, project_config, contexts, **change)
         find_data = _run_pass(find_prompt, cwd, pipeline.find, add_dirs, cli_defaults, FIND_SCHEMA)
         candidates = parse_candidates(find_data)
@@ -369,6 +390,7 @@ def run_pipeline(
             context_refs=[c.label for c in contexts],
         )
     finally:
+        shutil.rmtree(change_file.parent, ignore_errors=True)
         for c in contexts:
             try:
                 cleanup_context(c)
