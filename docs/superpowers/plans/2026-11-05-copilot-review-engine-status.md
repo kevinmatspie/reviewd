@@ -206,7 +206,7 @@ Everything in A and B happens as `mobiletest`, except step 1, which runs as `kev
 
    The report is copied to `/Users/Shared/reviewd-copilot-check-report.txt` for Claude to read. **Every line must be PASS before enabling `engine: pipeline`.** A WARN that a bogus token still worked means a stored login exists and wins over the token; tell Claude.
 
-**Status 2026-11-06:** Steps 1–5 are done. The check as `mobiletest` (Copilot 1.0.106, `gpt-6.1-sol`) gave 17 passed and 0 failed. Its one warning is the context clone that B creates. See the spec's "Spike results" for details.
+**Status 2026-11-06:** **A and B are done.** The check as `mobiletest` (Copilot 1.0.106, `gpt-6.1-sol`) gave **19 passed, 0 warnings, 0 failed**, with the context clone at `~mobiletest/repos/context/mobile-services`. The Copilot token is on Kevin's personal GitHub account for now; see the spec's "Spike results" for the service-account path. Next: the evaluation PR list, then C.
 
 ### B. mobile-services context clone
 
