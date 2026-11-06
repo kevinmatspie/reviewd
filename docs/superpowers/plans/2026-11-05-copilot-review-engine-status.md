@@ -145,17 +145,69 @@ This is the complete list, so you can revert any you don't want.
 
 ## Phase 7: what Kevin needs to do
 
-1. **Copilot for `mobiletest`:**
-   - Install Copilot CLI and put `COPILOT_GITHUB_TOKEN` in `~mobiletest/.config/reviewd/secrets.env`. Confirm `run.sh` exports it.
-   - Create a **dedicated `COPILOT_HOME`** for the daemon, with `disableAllHooks: true`.
-   - Re-run the spike as `mobiletest` to settle the token type and expiry, the auth-failure text (needed for `_AUTH_ERROR_PATTERN`), and whether `--sandbox` works there. Scripts: `~kevinm/reviewd-spike-scripts/`; use `run3.sh` for option A.
-2. **mobile-services context:** Create a dedicated clone with a **read-only deploy key**, not a dev checkout. Confirm `git fetch origin main` works non-interactively as `mobiletest`.
-3. **Config:** Add `context_repos.mobile-services` and the `review:` block with **`gpt-6.1-sol` for both passes** (your choice, 2026-11-05). A re-run of the smoke test with `gpt-6.1-sol` caught the same regression in 36 s with 2 premium requests (find: 5 model calls, about 77k input tokens; verify: 3 calls, about 21k). Then set `engine: pipeline` and `context: [mobile-services]` on both app repos.
-4. **Disable auto-approve** on both app repos for the first week.
-5. **Pick 6–8 evaluation PRs** (Task 14), then run `reviewd pr <repo> <id> --dry-run --force --engine legacy|pipeline` for each.
-6. **Deploy:** The live daemon runs `mobiletest`'s editable clone. It needs this branch merged or checked out there and a kickstart. There are no new dependencies beyond `904e268`'s `json-repair`; if that isn't installed in the tool env yet, it needs `uv tool install --reinstall --editable`.
+Everything in A and B happens as `mobiletest`. None of it affects the live daemon until the restart in C.
+
+### A. Copilot (do first)
+
+1. **Upgrade Copilot.** `mobiletest`'s Homebrew Copilot is **1.0.88**. That version has the needed flags, but not the `copilot config` subcommand, and the read-only behavior was verified on **1.0.105**. Run `brew-copilot-upgrade`.
+2. **Create a dedicated settings folder with hooks off:**
+   ```zsh
+   mkdir -m 700 ~/.config/reviewd/copilot
+   COPILOT_HOME=~/.config/reviewd/copilot copilot config disableAllHooks true
+   ```
+3. **Create the token.** It must be a fine-grained PAT on Kevin's account with the **"Copilot Requests"** permission; classic `ghp_` tokens are not supported. Add `COPILOT_GITHUB_TOKEN=…` to `~/.config/reviewd/secrets.env` (mode 600), and set a reminder for its expiry.
+4. **Edit the live `~/.config/reviewd/run.sh`.** Change only these two lines; the live file differs from the template on purpose.
+   ```zsh
+   export COPILOT_HOME="$HOME/.config/reviewd/copilot"
+   export COPILOT_AUTO_UPDATE=false
+   ```
+   Disabling auto-update pins the version. Upgrade deliberately, and re-run step 5 after every upgrade.
+5. **Run the check:** `zsh /Users/Shared/reviewd-copilot-check.sh` (the same file as `deploy/copilot-readonly-check.sh`). It takes about 2 minutes and about 4 premium requests, and it prints no secrets. It checks:
+   - the version
+   - the hooks setting
+   - the token type
+   - the auth-failure text, which feeds reviewd's `_AUTH_ERROR_PATTERN`
+   - that the token works headless
+   - read-only enforcement: outside, temp-dir, and symlink reads; writes; tool names; and the sandbox, each proven by a canary
+   - that the context clone fetches non-interactively
+
+   The report is copied to `/Users/Shared/reviewd-copilot-check-report.txt` for Claude to read. **Every line must be PASS before enabling `engine: pipeline`.** A WARN that a bogus token still worked means a stored login exists and wins over the token; tell Claude.
+
+### B. mobile-services context clone
+
+6. **Create the deploy key:** `ssh-keygen -t ed25519 -f ~/.ssh/mobile-services-deploy -N '' -C 'reviewd mobile-services (read-only)'`. Add the `.pub` file as a **read-only** Deploy key on `spie-dev/mobile-services`; that needs repo admin.
+7. **Add an SSH alias** to `~/.ssh/config`:
+   ```
+   Host github-mobile-services
+     HostName github.com
+     User git
+     IdentityFile ~/.ssh/mobile-services-deploy
+     IdentitiesOnly yes
+   ```
+8. **Clone:** `git clone git@github-mobile-services:spie-dev/mobile-services.git ~/repos/context/mobile-services`. That's the check script's default `CONTEXT_REPO`, so re-run it. Use the clone only for reviewd: reviewd creates and sweeps `.reviewd-worktrees/` inside it.
+
+### C. Go-live (after the evaluation)
+
+9. **Back up the state DB.** Stop the daemon, then copy `~/.local/share/reviewd/state.db` to `state.db.bak-<date>`. The new code adds an `attempts` column on first start.
+10. **Put the code in place.** Switch `~/repos/git/reviewd` to this branch, or to `main` after the merge. If `json-repair` isn't installed in the tool env, run `uv tool install --reinstall --editable ~/repos/git/reviewd`. The legacy repos get backoff and the timeout fix at this point.
+11. **Update `config.yaml`:**
+    - `context_repos.mobile-services` with `path: ~/repos/context/mobile-services` and `ref: main`
+    - a `review:` block with **`gpt-6.1-sol` for both passes** (Kevin's choice). The smoke-test re-run with it caught the same regression in 36 s for 2 premium requests.
+    - `engine: pipeline` and `context: [mobile-services]` on both app repos
+12. **Make sure auto-approve is off for both apps.** The global config can only turn it on (`enabled = global or project`). If an app's committed `.reviewd.yaml` sets `auto_approve.enabled: true`, that file has to change.
+13. **Restart:** `launchctl kickstart -k gui/502/com.spie.reviewd`, once no review is in flight.
+
+### Evaluation (Task 14)
+
+This can run as `kevinm` from the dev checkout, without touching the live daemon:
+
+- **Config:** `~/reviewd-eval/config.yaml` is Kevin's config plus the pipeline settings, with its own `state_db`.
+- **Runner:** `~/reviewd-eval/run.sh <repo> <pr> legacy|pipeline` does a dry run with `--force`. Logs go to `~/reviewd-eval/logs/`.
+- **Still needed:** pick the 6–8 PRs, ideally including shipped regressions traced from Jira.
 
 ## Not code, but flagged
+
+- **Bitbucket SSH host change, November 12, 2026:** Bitbucket's SSH banner says SSH traffic moves to `ssh.bitbucket.org` on that date. reviewd's clones fetch over `git@bitbucket.org:spiemobilerepo/...`. That includes `kevinm`'s clones, and probably `mobiletest`'s `~/.reviewd/spieconferences-*`. Switch the remotes (`git remote set-url origin git@ssh.bitbucket.org:spiemobilerepo/<repo>.git`, after accepting the new host key), or add a `~/.ssh/config` `Host bitbucket.org` → `HostName ssh.bitbucket.org` mapping. Otherwise worktree fetches, and with them reviews, may fail after that date.
 
 - **Exposed runner credentials:** The Bitbucket Pipelines runners on this machine pass OAuth client secrets and a repo access token on their command lines, readable by any local user via `ps`. Flagging only; I did nothing.
 
