@@ -172,15 +172,19 @@ This is the complete list, so you can revert any you don't want.
 
 Everything in A and B happens as `mobiletest`, except step 1, which runs as `kevinm`. None of it affects the live daemon until the restart in C.
 
+**Where GitHub comes in:** The iOS and Android code stays on **Bitbucket**. reviewd checks out each PR from Bitbucket into a local worktree and posts results through the Bitbucket API, as it does today. Copilot only reads those local files. GitHub is involved in exactly two places:
+- **Copilot's own sign-in**, because Copilot is a GitHub service (step 3).
+- **The `mobile-services` context repo**, which is hosted on GitHub at `git@github.com:spie-dev/mobile-services.git` (steps 6–8).
+
 ### A. Copilot (do first)
 
 1. **Upgrade Copilot, as `kevinm`.** `mobiletest`'s Homebrew Copilot is **1.0.88**. That version has the needed flags, but not the `copilot config` subcommand, and the read-only behavior was verified on **1.0.105**. Run `~kevinm/.local/bin/brew-copilot-upgrade` from Kevin's account, e.g. `! ~/.local/bin/brew-copilot-upgrade` in a Claude session. It asks for Kevin's sudo password and runs `brew` as Homebrew's owner (`mobiletest`) via `sudo -u`. `mobiletest` can't run it, because Kevin's home is mode 750. Afterwards, `/opt/homebrew/bin/copilot --version` should show at least 1.0.105.
-2. **Create a dedicated settings folder with hooks off:**
+2. **Create a dedicated settings folder with hooks off, as `mobiletest`.** It belongs to the daemon's account. Kevin's own `~/.copilot` is untouched.
    ```zsh
    mkdir -m 700 ~/.config/reviewd/copilot
    COPILOT_HOME=~/.config/reviewd/copilot copilot config disableAllHooks true
    ```
-3. **Create the token.** It must be a fine-grained PAT on Kevin's account with the **"Copilot Requests"** permission; classic `ghp_` tokens are not supported. Add `COPILOT_GITHUB_TOKEN=…` to `~/.config/reviewd/secrets.env` (mode 600), and set a reminder for its expiry.
+3. **Create the token.** This is a GitHub token for Copilot's sign-in and billing only; it's unrelated to where any code is hosted. Create a fine-grained PAT on Kevin's GitHub account (Settings → Developer settings → Fine-grained tokens) with the account permission **"Copilot Requests"** and **no repository access**. Classic `ghp_` tokens are not supported. Add `COPILOT_GITHUB_TOKEN=…` to `~/.config/reviewd/secrets.env` (mode 600), and set a reminder for its expiry.
 4. **Edit the live `~/.config/reviewd/run.sh`.** Change only these two lines; the live file differs from the template on purpose.
    ```zsh
    export COPILOT_HOME="$HOME/.config/reviewd/copilot"
