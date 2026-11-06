@@ -373,7 +373,8 @@ class CLIAuthError(RuntimeError):
 
 
 _AUTH_ERROR_PATTERN = re.compile(
-    r'(?i)(not authenticated|authentication failed|unauthorized|\b401\b|please log ?in|no copilot access)'
+    r'(?i)(not authenticated|not logged in|run /login|authentication failed|unauthorized|\b401\b|'
+    r'please log ?in|no copilot access)'
 )
 
 READ_ONLY_TOOLS = ('view', 'rg', 'glob')
