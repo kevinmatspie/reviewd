@@ -206,6 +206,8 @@ Everything in A and B happens as `mobiletest`, except step 1, which runs as `kev
 
    The report is copied to `/Users/Shared/reviewd-copilot-check-report.txt` for Claude to read. **Every line must be PASS before enabling `engine: pipeline`.** A WARN that a bogus token still worked means a stored login exists and wins over the token; tell Claude.
 
+**Status 2026-11-06:** Steps 1–5 are done. The check as `mobiletest` (Copilot 1.0.106, `gpt-6.1-sol`) gave 17 passed and 0 failed. Its one warning is the context clone that B creates. See the spec's "Spike results" for details.
+
 ### B. mobile-services context clone
 
 6. **Create the deploy key:** `ssh-keygen -t ed25519 -f ~/.ssh/mobile-services-deploy -N '' -C 'reviewd mobile-services (read-only)'`. Add the `.pub` file as a **read-only** Deploy key on `spie-dev/mobile-services`; that needs repo admin.

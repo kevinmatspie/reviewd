@@ -205,6 +205,12 @@ Option A in the implementation:
 - **Python supplies the change:** It resolves the merge-base once. It embeds the commit list (`git log --reverse`) and the full diff (normal context, size-capped, with `--stat` plus a "read these files" note when over the cap) in both the find and the verify prompts. Anchoring uses a separate `-U0` diff.
 - **`watch_paths` is honored:** Python owns every git call, so a pathspec applies to the log, the prompt diff, and the anchoring diff.
 
+**Re-run as `mobiletest` (2026-11-06, Copilot 1.0.106, `gpt-6.1-sol`, `deploy/copilot-readonly-check.sh`):** 17 passed, 0 failed. This resolves the deferred questions:
+
+- **Q5 (auth):** A fine-grained PAT with "Copilot Requests" works headless. `mobiletest` has no stored login, so the token is the only credential. A bogus or missing token fails with exit 1 and "Error: No authentication information found." (`_AUTH_ERROR_PATTERN` now matches this). Initially `gpt-6.1-sol` was "not available" to the new token even though Kevin's OAuth login could use it. Kevin resolved that before this run.
+- **Q7 (sandbox):** `--sandbox` works for `mobiletest`.
+- **Read-only enforcement:** Every block was re-verified on 1.0.106, with an attempt shown for each: outside, temp-directory, and symlink reads; writes; only `view`/`rg`/`glob` called; PR instruction files ignored. The PR repo's `.mcp.json` is skipped because the folder is untrusted.
+
 **Options presented to Kevin (recommendation first):**
 
 - **A (recommended): No shell tool.**
