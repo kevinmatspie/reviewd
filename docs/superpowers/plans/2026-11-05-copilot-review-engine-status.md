@@ -256,6 +256,8 @@ Everything in A and B happens as `mobiletest`, except step 1, which runs as `kev
 
 ### C. Go-live (after the evaluation)
 
+**Done 2026-11-06 15:29.** Kevin performed C as `mobiletest`. The steps were: stop via `launchctl bootout`, back up state.db and the config, switch the clone to `feat/copilot-review-engine`, add `context_repos`/`review` (`gpt-6.1-sol`) and set `engine: pipeline` on both apps, then start via `launchctl bootstrap`. The daemon is running (`reviewd watch --review-existing`). Rollback: set `engine: legacy` on the apps, or switch the clone back to the commit saved in `~mobiletest/reviewd-rollback-commit.txt`, restore `config.yaml.bak-20261106`, and restart. Note: after `bootout`, the restart command is `bootstrap`; `kickstart` reports "Could not find service".
+
 9. **Back up the state DB.** Stop the daemon, then copy `~/.local/share/reviewd/state.db` to `state.db.bak-<date>`. The new code adds an `attempts` column on first start.
 10. **Put the code in place.** Switch `~/repos/git/reviewd` to this branch, or to `main` after the merge. If `json-repair` isn't installed in the tool env, run `uv tool install --reinstall --editable ~/repos/git/reviewd`. The legacy repos get backoff and the timeout fix at this point.
 11. **Update `config.yaml`:**
