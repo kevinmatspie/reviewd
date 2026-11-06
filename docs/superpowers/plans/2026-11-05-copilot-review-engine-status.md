@@ -184,7 +184,11 @@ Everything in A and B happens as `mobiletest`, except step 1, which runs as `kev
    mkdir -m 700 ~/.config/reviewd/copilot
    COPILOT_HOME=~/.config/reviewd/copilot copilot config disableAllHooks true
    ```
-3. **Create the token.** This is a GitHub token for Copilot's sign-in and billing only; it's unrelated to where any code is hosted. Create a fine-grained PAT on Kevin's GitHub account (Settings → Developer settings → Fine-grained tokens) with the account permission **"Copilot Requests"** and **no repository access**. Classic `ghp_` tokens are not supported. Add `COPILOT_GITHUB_TOKEN=…` to `~/.config/reviewd/secrets.env` (mode 600), and set a reminder for its expiry.
+3. **Create the token.** This is a GitHub token for Copilot's sign-in and billing only; it's unrelated to where any code is hosted. Create a fine-grained PAT at <https://github.com/settings/personal-access-tokens/new>:
+   - **Resource owner:** Kevin's **personal account**. "Copilot Requests" only exists on user-owned tokens and is hidden when an organization is the owner.
+   - **Repository access:** **Public repositories**, the minimum.
+   - **Permissions:** the **Account** tab (not Repository) → Add permissions → **Copilot Requests**. "Copilot agent settings" is a different permission.
+   - The token starts with `github_pat_`. Classic `ghp_` tokens are not supported. Add `COPILOT_GITHUB_TOKEN=…` to `~/.config/reviewd/secrets.env` (mode 600), and set a reminder for its expiry.
 4. **Edit the live `~/.config/reviewd/run.sh`.** Change only these two lines; the live file differs from the template on purpose.
    ```zsh
    export COPILOT_HOME="$HOME/.config/reviewd/copilot"
