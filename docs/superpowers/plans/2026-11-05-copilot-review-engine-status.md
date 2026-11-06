@@ -106,6 +106,35 @@ Both completed. All worktrees were cleaned up afterwards. Logs are in `~/reviewd
 - **Token use.** Premium-request cost is flat at 1 per pass. Token use varies widely, from 659k to 2.2M input tokens on the find pass. Watch this if Copilot billing moves to AI credits (`totalNanoAiu` is in the usage file).
 - **Expired token in `kevinm`'s pilot secrets.** The legacy runs first failed with Claude's "Not logged in · Please run /login" because the `CLAUDE_CODE_OAUTH_TOKEN` in `kevinm`'s `~/.config/reviewd/secrets.env` appears expired. The eval runner now unsets it and uses Kevin's stored Claude login. This doesn't affect `mobiletest`'s live token. The run also showed the message wasn't classified as an auth error, so `_AUTH_ERROR_PATTERN` now includes it (`3a0f1cc`).
 
+## Evaluation: shipped regressions replayed (2026-11-06, as `kevinm`, dry run)
+
+Kevin supplied three shipped regressions. Agents traced each one to the change that introduced it. Each change was rebuilt as `replay` (head) over `replay-base` (pre-merge base) in a scratch clone and reviewed with `scan` by both engines (`~/reviewd-eval/replay.sh`, logs in `~/reviewd-eval/logs/replay-*`). The context was `mobile-services@main` as of today, not as of the PR.
+
+| Case | Introducing change | Pipeline (gpt-6.1-sol) | Legacy (claude-sonnet-5-5, `--effort high`) |
+|---|---|---|---|
+| **MOB-1869** (Android paging arrows) | PR #536 `d5a17b0a..c7acd173`, 15 files: the `if (event == null)` guard in `EventDetailPagingFragment.displayContent()` | ✅ **Critical, inline, exact line.** 7 findings + 1 edge case; 6 min. | ✅ **Critical, inline, exact line plus fix.** 4 findings; 51 s. |
+| **MOB-1936** (iOS session report Save button hidden) | `MOB-1785` branch `3294d684..01d81b5a`, 32 files: IB shrank SAVE to 36pt while its 53pt title inset (an unchanged line) remained | ✅ **Exact cause** ("SAVE is only 36 points wide but retains a 53-point left title inset"), but as a suggestion, **finding 19 of 19**. 11 min. | ❌ Missed. 7 findings, all on the recommendations logic. 3 min. |
+| **MOB-2079** (iOS People search empty after reload) | MOB-1889 merge `49d052e0..8ee822b2`, 46 files, ~337k-char diff: `DETACH symposiumdb` before close invalidates the People screen's kept prepared statement (SQLITE_MISUSE) | ❌ Missed. It read the full diff (10 findings are on hunks reachable only through `change.diff`) and reported 27 findings + 1 edge case in the same update/reload code, but didn't connect the detach to the stale statement. 14 min. | ❌ Missed. 8 findings. 6 min. |
+
+With last night's open PRs, the pipeline caught **2 of 3** shipped regressions plus the Android #625 data-loss issue that legacy dismissed. Legacy caught **1 of 3** plus the iOS #427 status-bar regression. Each engine still finds things the other misses. Cost was a flat 2 premium requests per pipeline review. Time ranged from 2 to 14 min, against a 30-minute target.
+
+**Tuning signals (not acted on):**
+
+- **Noise scales with PR size.** The pipeline reported 1, 1, 7, 19, and 27 findings, against legacy's 3, 0, 4, 7, and 8. A real catch can end up last (MOB-1936). Options to consider:
+  - order summary findings by severity and risk category
+  - cap the summary and fold the rest into a collapsed list
+  - raise the verifier's bar for `confirmed`
+- **Candidate counts swing widely** with PR size (1 to 28). The find pass is thorough on big PRs and terse on small ones.
+- **MOB-2079-class bugs** (cross-file SQLite or resource-lifetime interactions) are missed by both engines. Per-repo `instructions` naming fragile areas could help, e.g. "prepared statements outlive DB reloads; check `ATTACH`/`DETACH`/close against cached `sqlite3_stmt`s".
+- **Real issues worth a look?** Several MOB-2079 pipeline findings describe possibly real issues in code that has since shipped, e.g. "Failed update checks can delete the live event database", delta search updates crossing ID namespaces, and an unexecuted ZoneDistance insert (which legacy also flagged). They were not verified against current code. A human should triage them before anyone files tickets.
+
+**Bugs the evaluation found in the pipeline, fixed in `e47454b`:**
+
+- **Context worktree collision.** `ctx-<slug>-pr-<id>` was shared by concurrent reviews of the same PR (here, two `scan`s with PR id 0; in production, the daemon plus a manual `reviewd pr`). The first review to finish deleted it under the other, whose verify pass then failed. That discarded a 22-candidate, 4.1M-token find pass, which is the concrete cost of the "verify failure discards find" open item. Each checkout now gets a unique suffix. The legacy PR worktree `pr-<id>` has the same pre-existing collision risk; flagged, not changed.
+- **A diff over the cap lost whole files.** The cut fell at a file boundary, so a 198k-char file diff (the one with the bug) was dropped, and with no shell the model couldn't see what changed in it. The full diff is now written to `$XDG_CACHE_HOME/reviewd/changes/<run>/change.diff` (outside the temp directory), passed to both passes via `--add-dir`, and removed afterwards. The embedded part is cut at a hunk boundary. A crash can orphan a change directory; these are small files, and there's no sweep yet.
+
+**Incident: Kevin's dev clones were fast-forwarded.** The first eval runs (2026-11-05 16:08) used a config copied from Kevin's, pointing at his dev clones. reviewd's `_sync_project_config` runs `git pull --ff-only` on the configured repo path, so it fast-forwarded iOS `v14.1.3` (`76e26b52` → `14d2bde8`) and Android `master` (`fae3316f` → `54137899`). Both working copies were clean, so no work was lost. The eval now uses its own clones under `~/reviewd-eval/clones/`. To undo: `git -C <clone> reset --hard <old sha>`.
+
 ## Deviations from the plan, and why
 
 1. **Option A (no shell)** replaces the `READ_ONLY_GIT` shell allowlist, per the spike and your decision.
