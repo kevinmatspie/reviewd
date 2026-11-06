@@ -170,11 +170,11 @@ This is the complete list, so you can revert any you don't want.
 
 ## Phase 7: what Kevin needs to do
 
-Everything in A and B happens as `mobiletest`. None of it affects the live daemon until the restart in C.
+Everything in A and B happens as `mobiletest`, except step 1, which runs as `kevinm`. None of it affects the live daemon until the restart in C.
 
 ### A. Copilot (do first)
 
-1. **Upgrade Copilot.** `mobiletest`'s Homebrew Copilot is **1.0.88**. That version has the needed flags, but not the `copilot config` subcommand, and the read-only behavior was verified on **1.0.105**. Run `brew-copilot-upgrade`.
+1. **Upgrade Copilot, as `kevinm`.** `mobiletest`'s Homebrew Copilot is **1.0.88**. That version has the needed flags, but not the `copilot config` subcommand, and the read-only behavior was verified on **1.0.105**. Run `~kevinm/.local/bin/brew-copilot-upgrade` from Kevin's account, e.g. `! ~/.local/bin/brew-copilot-upgrade` in a Claude session. It asks for Kevin's sudo password and runs `brew` as Homebrew's owner (`mobiletest`) via `sudo -u`. `mobiletest` can't run it, because Kevin's home is mode 750. Afterwards, `/opt/homebrew/bin/copilot --version` should show at least 1.0.105.
 2. **Create a dedicated settings folder with hooks off:**
    ```zsh
    mkdir -m 700 ~/.config/reviewd/copilot
