@@ -37,6 +37,15 @@ fi
 # Avoid nested-session detection in claude CLI subprocesses.
 unset CLAUDECODE
 
+# GitHub Copilot CLI (pipeline engine). A dedicated COPILOT_HOME keeps user-level
+# hooks, plugins and instructions out of reviews; set `disableAllHooks` there once:
+#   COPILOT_HOME=~/.config/reviewd/copilot copilot config disableAllHooks true
+# Auto-update stays off so the read-only behavior verified by
+# deploy/copilot-readonly-check.sh can't change underneath the daemon; upgrade
+# deliberately and re-run that check.
+export COPILOT_HOME="$HOME/.config/reviewd/copilot"
+export COPILOT_AUTO_UPDATE=false
+
 # -v for info-level logging.
 # --review-existing sweeps unreviewed open PRs on every boot, so reviews missed
 # while the daemon was offline (new PRs or new commits) get picked up on restart.
