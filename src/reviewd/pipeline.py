@@ -31,6 +31,8 @@ logger = logging.getLogger(__name__)
 VERIFY_ATTEMPTS = 2
 MAX_PROMPT_DIFF_CHARS = 200_000
 MAX_PROMPT_COMMITS_CHARS = 20_000
+MAX_DETAILED_FINDINGS = 8
+_IMPACT_ORDER = {'high': 0, 'medium': 1, 'low': 2}
 
 _HUNK_PATTERN = re.compile(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@')
 _SEVERITY_VALUES = {s.value for s in Severity}
@@ -177,6 +179,7 @@ def merge_verdicts(
     findings: list[Finding] = []
     edge_cases: list[Finding] = []
     dropped: list[tuple[Candidate, str]] = []
+    impact: dict[int, int] = {}
     for c in candidates:
         v = by_id.get(c.id)
         if v is None:
@@ -188,10 +191,12 @@ def merge_verdicts(
             if v.get('severity') in _SEVERITY_VALUES:
                 c.finding.severity = Severity(v['severity'])
             findings.append(c.finding)
+            impact[id(c.finding)] = _IMPACT_ORDER.get(str(v.get('impact')), 1)
         elif verdict == 'dropped':
             dropped.append((c, str(v.get('reason', ''))))
         else:
             edge_cases.append(c.finding)
+    findings.sort(key=lambda f: impact[id(f)])
     return findings, edge_cases, dropped
 
 
@@ -239,9 +244,10 @@ VERIFY_SCHEMA: dict = {
                     'id': {'type': 'string'},
                     'verdict': {'type': 'string', 'enum': ['confirmed', 'edge_case', 'dropped']},
                     'severity': {'type': ['string', 'null']},
+                    'impact': {'type': ['string', 'null'], 'enum': ['high', 'medium', 'low', None]},
                     'reason': {'type': 'string'},
                 },
-                'required': ['id', 'verdict', 'severity', 'reason'],
+                'required': ['id', 'verdict', 'severity', 'impact', 'reason'],
                 'additionalProperties': False,
             },
         },
@@ -388,6 +394,7 @@ def run_pipeline(
             duration_seconds=time.monotonic() - t0,
             edge_cases=edge_cases,
             context_refs=[c.label for c in contexts],
+            detailed_limit=MAX_DETAILED_FINDINGS,
         )
     finally:
         shutil.rmtree(change_file.parent, ignore_errors=True)

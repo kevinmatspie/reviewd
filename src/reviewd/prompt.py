@@ -310,6 +310,13 @@ or the caller is unaffected, do not confirm.
 - Use "The Change" below to judge whether an issue is caused by this PR.
 - Do NOT add new issues. Only judge the candidates given.
 - Return exactly one verdict per candidate id, each with a one-line reason.
+- For each `confirmed` verdict, rate `impact` for the people using the app:
+  - `high`: user-visible breakage (a control, screen, or flow that no longer works or can't be seen), data loss or \
+corruption, a crash, or a security or privacy exposure.
+  - `medium`: wrong or degraded behavior that needs specific conditions or affects a narrow set of users.
+  - `low`: maintainability, performance, or minor polish.
+  Use null for verdicts that are not `confirmed`. Findings are presented to the author in impact order, so be honest \
+rather than generous.
 
 ## Severity Definitions
 {severity_section}
@@ -325,7 +332,7 @@ After completing verification, output EXACTLY this JSON block as the last thing 
 ```json
 {{
   "verdicts": [
-    {{"id": "C1", "verdict": "confirmed|edge_case|dropped", "severity": "critical|suggestion|nitpick|good|null", "reason": "one line"}}
+    {{"id": "C1", "verdict": "confirmed|edge_case|dropped", "severity": "critical|suggestion|nitpick|good|null", "impact": "high|medium|low|null", "reason": "one line"}}
   ],
   "summary": "prioritized recommendations based on confirmed issues only",
   "approve": true|false,

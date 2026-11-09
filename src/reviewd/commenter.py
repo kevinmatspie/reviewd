@@ -43,6 +43,13 @@ def _format_finding_summary(finding: Finding) -> str:
     return f'- **{finding.title}**{loc}\n  {finding.issue}'
 
 
+def _format_finding_title(finding: Finding) -> str:
+    loc = f' — `{finding.file}`' if finding.file else ''
+    if finding.file and finding.line:
+        loc += f' (line {finding.line})'
+    return f'- {finding.title}{loc}'
+
+
 # TODO: support multi-line suggestions (end_line) — needs correct line range in provider API calls
 def _format_inline_comment(finding: Finding) -> str:
     emoji = SEVERITY_EMOJI.get(finding.severity, '')
@@ -121,6 +128,7 @@ def _format_summary_comment(
     for f in summary_findings:
         grouped.setdefault(f.severity, []).append(f)
 
+    detailed_left = result.detailed_limit if result.detailed_limit is not None else len(summary_findings)
     for severity in [Severity.CRITICAL, Severity.SUGGESTION, Severity.NITPICK, Severity.GOOD]:
         findings = grouped.get(severity, [])
         if not findings:
@@ -129,7 +137,17 @@ def _format_summary_comment(
         lines.append(f'### {emoji} {severity.value.capitalize()} ({len(findings)})')
         lines.append('')
         for finding in findings:
-            lines.append(_format_finding_summary(finding))
+            if detailed_left > 0:
+                lines.append(_format_finding_summary(finding))
+                detailed_left -= 1
+            else:
+                lines.append(_format_finding_title(finding))
+        lines.append('')
+
+    if result.detailed_limit is not None and len(summary_findings) > result.detailed_limit:
+        lines.append(
+            f'*Showing details for the {result.detailed_limit} highest-impact findings; the rest are listed by title.*'
+        )
         lines.append('')
 
     if result.edge_cases:
@@ -336,6 +354,7 @@ def post_review(
         duration_seconds=result.duration_seconds,
         edge_cases=edge_cases,
         context_refs=result.context_refs,
+        detailed_limit=result.detailed_limit,
     )
 
     inline_severities = {s for s in project_config.inline_comments_for}

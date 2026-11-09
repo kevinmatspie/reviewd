@@ -128,6 +128,15 @@ With last night's open PRs, the pipeline caught **2 of 3** shipped regressions p
 - **MOB-2079-class bugs** (cross-file SQLite or resource-lifetime interactions) are missed by both engines. Per-repo `instructions` naming fragile areas could help, e.g. "prepared statements outlive DB reloads; check `ATTACH`/`DETACH`/close against cached `sqlite3_stmt`s".
 - **Real issues worth a look?** Several MOB-2079 pipeline findings describe possibly real issues in code that has since shipped, e.g. "Failed update checks can delete the live event database", delta search updates crossing ID namespaces, and an unexecuted ZoneDistance insert (which legacy also flagged). They were not verified against current code. A human should triage them before anyone files tickets.
 
+**Noise tuning, done 2026-11-06 (committed 2026-11-09):**
+- **Impact rating:** the verifier now rates each confirmed finding's `impact` (high: user-visible breakage, data loss, crash, or security; medium; low). Findings are sorted by impact within each severity group.
+- **Summary cap:** the summary shows full details for the 8 highest-impact findings and lists the rest by title, with a note. Pipeline only; legacy output is unchanged.
+- **Checked on MOB-1936 with the original 20 candidates:**
+  - The top 8 became user-visible breakage, for example saved exhibitors that can't be removed, a lost sort menu, blank segments, and CloudKit type corruption. The rest dropped to titles.
+  - The Save-button finding was marked `edge_case` that time ("couldn't prove it") and shown in full under "Edge cases to consider".
+  - A full re-run didn't find it at all. Catches vary between runs: 1 of 2 full runs found MOB-1936.
+- **Possible next tweak:** a verify-prompt rule that layout frame/inset changes which put a control outside its container are high-impact. Hold off until live reviews show whether layout misses are common.
+
 **Bugs the evaluation found in the pipeline, fixed in `e47454b`:**
 
 - **Context worktree collision.** `ctx-<slug>-pr-<id>` was shared by concurrent reviews of the same PR (here, two `scan`s with PR id 0; in production, the daemon plus a manual `reviewd pr`). The first review to finish deleted it under the other, whose verify pass then failed. That discarded a 22-candidate, 4.1M-token find pass, which is the concrete cost of the "verify failure discards find" open item. Each checkout now gets a unique suffix. The legacy PR worktree `pr-<id>` has the same pre-existing collision risk; flagged, not changed.

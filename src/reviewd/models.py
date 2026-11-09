@@ -56,6 +56,7 @@ class ReviewResult:
     duration_seconds: float | None = None
     edge_cases: list[Finding] = field(default_factory=list)
     context_refs: list[str] = field(default_factory=list)
+    detailed_limit: int | None = None
 
 
 @dataclass
