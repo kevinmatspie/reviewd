@@ -19,7 +19,7 @@ import httpx
 from reviewd import scope
 from reviewd.colors import BOLD_WHITE, CLEAR_LINE, CYAN, DIM, GREEN, RESET, WHITE, YELLOW
 from reviewd.commenter import post_review
-from reviewd.config import get_provider, load_project_config, resolve_pipeline, review_label
+from reviewd.config import effective_engine, get_provider, load_project_config, resolve_pipeline, review_label
 from reviewd.models import GlobalConfig, PRInfo, ProjectConfig, RepoConfig
 from reviewd.reviewer import DEFAULT_TIMEOUT, cleanup_stale_worktrees, get_diff_lines, review_pr, terminate_all
 from reviewd.state import MAX_FAILURES, StateDB
@@ -331,11 +331,15 @@ def _boot_summary(global_config: GlobalConfig, state_db: StateDB, review_existin
                 continue
             if not prs:
                 prs = []
+            label_cli, label_model = review_label(global_config, repo_config)
+            runner = f'{effective_engine(global_config, repo_config).value}: {label_cli.value}'
+            if label_model:
+                runner += f' {label_model}'
             logger.info(
                 f'Watching {GREEN}%s{RESET} (%s, %s) — %d open PRs',
                 repo_config.name,
                 repo_config.provider,
-                repo_config.cli.value,
+                runner,
                 len(prs),
             )
             skipped = 0
