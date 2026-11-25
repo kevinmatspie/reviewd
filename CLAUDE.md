@@ -57,7 +57,3 @@ rm -rf dist && uv build && uv publish
 - The `legacy` engine (single prompt) is temporary: once `pipeline` is trusted on the mobile apps, move the QA repos to it and delete `REVIEW_TEMPLATE` and the legacy path (see spec Open items)
 - Copilot (pipeline engine) must never get a shell tool: an allowlisted `git` is not read-only (`git grep -O` runs commands). Keep `--available-tools=view,rg,glob`
 - Behind a TLS-inspection proxy, cert-verify failures surface as `httpx.ConnectError` and log as "Network unavailable" (misleading — network is fine). Check the cert issuer; fix at the proxy or via the OS trust store, not a corporate-only CA bundle. See README troubleshooting section
-
-## In-flight work (branch `feat/copilot-review-engine`)
-
-Implementing the `pipeline` review engine (Copilot CLI find → verify, with `mobile-services` as read-only context). Phases 0–6 are done; current state and Phase 7 steps are in `docs/superpowers/plans/2026-11-05-copilot-review-engine-status.md`. Background: `docs/superpowers/plans/2026-11-05-copilot-review-engine-handoff.md`. Remove this section when the branch merges.
