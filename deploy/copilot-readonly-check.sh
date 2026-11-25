@@ -206,7 +206,20 @@ if [[ -n "$TOKEN" ]] && grep -qF -- "$TOKEN" "$REPORT"; then
   sed -i '' "s|$TOKEN|[REDACTED]|g" "$REPORT"
   fail "the token appeared in the report and was redacted; inspect $OUT before sharing anything"
 fi
-if cp "$REPORT" "$SHARED_REPORT" 2>/dev/null && chmod 644 "$SHARED_REPORT"; then
+publish_shared_report() {
+  if [[ -L "$SHARED_REPORT" ]] || { [[ -e "$SHARED_REPORT" ]] && [[ ! -O "$SHARED_REPORT" ]]; }; then
+    print -r -- "Not copying the report: $SHARED_REPORT is a symlink or owned by another user"
+    return 1
+  fi
+  local tmp
+  tmp=$(mktemp "${SHARED_REPORT:h}/.reviewd-copilot-check.XXXXXX") || return 1
+  if cat "$REPORT" > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$SHARED_REPORT"; then
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
+if publish_shared_report 2>/dev/null; then
   print -r -- "Report: $REPORT (copied to $SHARED_REPORT)"
 else
   print -r -- "Report: $REPORT"
