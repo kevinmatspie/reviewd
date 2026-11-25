@@ -303,7 +303,15 @@ def _collect_eligible_prs(
                 logger.debug('PR #%d in cooldown (%dmin remaining), skipping', pr.pr_id, remaining)
                 continue
         if repo_config.watch_paths:
-            changed = provider.list_pr_files(repo_config.slug, pr.pr_id)
+            try:
+                changed = provider.list_pr_files(repo_config.slug, pr.pr_id)
+            except httpx.HTTPStatusError as e:
+                logger.warning(
+                    'Could not list files for PR #%d (HTTP %d), skipping it this poll',
+                    pr.pr_id,
+                    e.response.status_code,
+                )
+                continue
             if not scope.any_in_scope(changed, repo_config.watch_paths):
                 logger.debug('PR #%d touches no watched paths, skipping', pr.pr_id)
                 continue
